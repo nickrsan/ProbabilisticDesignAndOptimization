@@ -1,5 +1,7 @@
 import numpy
 
+import support
+
 MAXIMIZE = max
 MINIMIZE = min
 
@@ -15,7 +17,7 @@ class DynamicProgram(object):
 		Currently designed to only handle backward DPs
 	"""
 
-	def __init__(self, calculation_function, timestep_size, time_horizon, selection_constraints=None, decision_variables=None):
+	def __init__(self, calculation_function, timestep_size, time_horizon, discount_rate, selection_constraints=None, decision_variables=None):
 		"""
 
 		:param calculation_function: What function are we using to evaluate? Basically, is this a maximization (benefit)
@@ -26,10 +28,15 @@ class DynamicProgram(object):
 				If so, this should be a list with the required quantity at each time step
 
 		:param decision_variables: list of DecisionVariable objects
+
+		:param discount_rate: give the discount rate in "annual" units. Though timesteps don't need to be in years, think
+			of the discount rate as applying per smallest possible timestep size, so if your timestep_size is 40, then
+			your discount rate will be transformed to cover 40 timesteps (compounding).
 		"""
 		self.stages = []
 		self.timestep_size = timestep_size
 		self.time_horizon = time_horizon
+		self.discount_rate = discount_rate
 
 		# set up decision variables passed in
 		if not decision_variables:
@@ -50,8 +57,8 @@ class DynamicProgram(object):
 		elif self.calculation_function is min:
 			self.exclusion_value = 9223372036854775808  # max value for a signed 64 bit int - this should force it to not be selected in minimization
 
-	def add_stage(self):
-		stage = Stage()
+	def add_stage(self, name):
+		stage = Stage(name=name)
 
 		self.stages.append(stage)
 		self._index_stages()
@@ -76,59 +83,56 @@ class DynamicProgram(object):
 		:return:
 		"""
 		for stage_id in range(self.time_horizon, self.timestep_size):
-			self.add_stage()
+			self.add_stage(name="Year {}".format(stage_id))
 
 	def run(self):
 
 		# build a matrix where everything is 0  - need to figure out what the size of the x axis is
-		matrix = numpy.zeros((int(self.time_horizon/self.timestep_size), ))
+		rows = int(self.time_horizon/self.timestep_size)  # this is the wrong way to do this - the matrix should
+		matrix = numpy.zeros((rows, ))
 
-		for stage in range(self.time_horizon, self.timestep_size):
+		for stage in range(rows):
 			for index, row in enumerate(matrix):
-				# if index >= required[year]:
-				#	needed_now = index - required[year]
-				matrix[index][year] = pv_cost(index, year)
+				matrix[index][stage] = support.present_value(index, year=stage*self.timestep_size, discount_rate=self.discount_rate )
 
 		matrix_array = numpy.array(matrix)  # make it a numpy array so we can easily take a vertical slice
 
+		# This next section is old code from a prior simple DP - it will be removed, but was how the set of stages was
+		# built previously so I can see what the usage was like while building this for multiple objectives
 		stages = []
-		for year in range(num_years):
-			cost_list = matrix_array[1:,
-						year]  # pull the column out of the matrix corresponding to this year - remove the 0 value first row (should look into how this is getting there)
-			year_stage = Stage(name="Year {}".format(year), cost_benefit_list=list(cost_list), calculation_function=min,
-							   selection_constraints=required)
+		for year in range(rows):
+			cost_list = matrix_array[1:, year]  # pull the column out of the matrix corresponding to this year - remove the 0 value first row (should look into how this is getting there)
+			year_stage = Stage(name="Year {}".format(year), cost_benefit_list=list(cost_list), calculation_function=min, selection_constraints=required)
 			year_stage.max_selections = needed_trucks
 			year_stage.number = year
 			stages.append(year_stage)
 
-		for index, stage in enumerate(stages):  # make the relationships now
-			if index > 0:
-				stages[index].previous = stages[index - 1]
-			if index + 1 < len(stages):  # if it's not the last one
-				stages[index].next = stages[index + 1]
-
-		stages[-1].optimize()
-		stages[0].get_optimal_values()
+		# initiate the optimization and retrieval of the best values
+		self.stages[-1].optimize()
+		self.stages[0].get_optimal_values()
 
 
 class Stage(object):
-	def __init__(self, name, cost_benefit_list, parent_dp, max_selections=7, previous=None, next=None):
+	def __init__(self, name, cost_benefit_list, parent_dp, max_selections=7, previous=None, next_stage=None):
 		"""
 
 		:param name:
 		:param cost_benefit_list: an iterable containing benefit or cost values at each choice step
 		:param max_selections: How many total items are we selecting?
 		:param previous: The previous stage, if one exists
-		:param next: The next stage, if one exists
+		:param next_stage: The next stage, if one exists
 		"""
 		self.name = name
 		self.parent_dp = parent_dp
 		self.cost_benefit_list = cost_benefit_list
 		self.max_selections = max_selections
-		self.next = next
+		self.next = next_stage
 		self.previous = previous
 		self.matrix = None  # this will be created from the parameters when .optimize is run
 		self.number = None
+
+		self.pass_data = []
+		self.choices_index = []
 
 	def optimize(self, prior=None):
 
@@ -183,9 +187,12 @@ class Stage(object):
 		if self.previous:
 			self.previous.optimize(self.pass_data)  # now run the prior stage
 
-	def get_optimal_values(self, prior=None):
-		if not prior:
-			prior = 0
+	def get_optimal_values(self, prior=0):
+		"""
+			After running the backward DP, moves forward and finds the best choices at each stage.
+		:param prior: The value of the choice at each stage
+		:return: 
+		"""
 
 		amount_remaining = self.max_selections - prior
 		if amount_remaining > 0:
