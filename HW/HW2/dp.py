@@ -6,10 +6,19 @@ MINIMIZE = min
 
 class DynamicProgram(object):
 	"""
-		This object actually runs the DP - doesn't currently support multiple decision variables or probabilities
+		This object actually runs the DP - doesn't currently support multiple decision variables or probabilities.
+
+		Currently, this code uses a list-based method for each stage of the DP, but it could likely be sped up significantly
+		by converting this to use numpy instead. This will be a future upgrade.
 	"""
 
 	def __init__(self, calculation_function):
+		"""
+
+		:param calculation_function: What function are we using to evaluate? Basically, is this a maximization (benefit)
+		 or minimization (costs) setup. Provide the function object for max or min. Provide the actual `min` or `max functions
+		 (don't run it, just the name) or if convenient, use the shortcuts dp.MINIMIZE or dp.MAXIMIZE
+		"""
 		self.stages = []
 
 		self.calculation_function = calculation_function
@@ -39,7 +48,7 @@ class DynamicProgram(object):
 
 
 class Stage(object):
-	def __init__(self, name, cost_benefit_list, parent_dp, max_selections=7, previous=None, next=None, selection_constraints=None, calculation_function=max):
+	def __init__(self, name, cost_benefit_list, parent_dp, max_selections=7, previous=None, next=None, selection_constraints=None):
 		"""
 
 		:param name:
@@ -48,16 +57,14 @@ class Stage(object):
 		:param previous: The previous stage, if one exists
 		:param next: The next stage, if one exists
 		:param selection_constraints: Is there a minimum value that must be achieved in the selection? If so, this should be a list with the required quantity at each time step
-		:param calculation_function: What function are we using to evaluate? Basically, is this a maximization (benefit) or minimization (costs) setup. Provide the function object for max or min
 		"""
 		self.name = name
-		self.previous = previous
 		self.parent_dp = parent_dp
 		self.cost_benefit_list = cost_benefit_list
 		self.max_selections = max_selections
 		self.next = next
+		self.previous = previous
 		self.matrix = None  # this will be created from the parameters when .optimize is run
-		self.calculation_function = self.parent_dp.calculation_function
 		self.selection_constraints = selection_constraints
 		self.number = None
 
@@ -108,8 +115,8 @@ class Stage(object):
 					if column_value == 0:
 						self.matrix[row_index][column_index] = self.parent_dp.exclusion_value  # setting to exclusion value makes it unselected still
 
-			self.pass_data = [self.calculation_function(row) for row in self.matrix]  # sum the rows and find the max
-			self.choices_index = [row.index(self.calculation_function(row)) for row in self.matrix]  # get the column of the min/max value
+			self.pass_data = [self.parent_dp.calculation_function(row) for row in self.matrix]  # sum the rows and find the max
+			self.choices_index = [row.index(self.parent_dp.calculation_function(row)) for row in self.matrix]  # get the column of the min/max value
 
 		if self.previous:
 			self.previous.optimize(self.pass_data)  # now run the prior stage
