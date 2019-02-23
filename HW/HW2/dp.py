@@ -5,9 +5,39 @@ import support
 MAXIMIZE = max
 MINIMIZE = min
 
+
+class StateVariable(object):
+	"""
+		Not sure what I'm going to do with this yet, but I think we'll need it in order to have rows for interactions
+		between multiple state variables.
+
+		We'll probably want to do something with the probabilities and bayesian updating in this class.
+
+		When we go to use all the state variables together, we'll need to discretize them each, and then we'll need to combine
+		them to get all the rows in the table for each stage. Assuming we have some attribute .discretized that contains
+		all the values for this state variable and that the DynamicProgram class has a list of these state variables called
+		.state_variables, we can get all possible combinations for generating a row using `itertools.product(*[var.discretized for var in self.state_variables])`
+		Note the asterisk at the front, which takes that list and expands it so each one is an individual argument to
+		itertools.product
+	"""
+
+
+	pass
+
+
 class DecisionVariable(object):
 	def __init__(self, name):
+		"""
+			We'll use this to manage the decision variable - we'll need columns for each potential value here
+		:param name:
+		"""
 		self.name = name
+		self.min = None
+		self.max = None
+		self.step_size = None
+
+	def options(self):
+		return range(self.min, self.max, self.step_size)
 
 
 class DynamicProgram(object):
@@ -17,7 +47,7 @@ class DynamicProgram(object):
 		Currently designed to only handle backward DPs
 	"""
 
-	def __init__(self, calculation_function, timestep_size, time_horizon, discount_rate, selection_constraints=None, decision_variables=None):
+	def __init__(self, calculation_function, timestep_size, time_horizon, discount_rate, state_variables=None, selection_constraints=None, decision_variables=None):
 		"""
 
 		:param calculation_function: What function are we using to evaluate? Basically, is this a maximization (benefit)
@@ -37,6 +67,11 @@ class DynamicProgram(object):
 		self.timestep_size = timestep_size
 		self.time_horizon = time_horizon
 		self.discount_rate = discount_rate
+
+		if not state_variables:
+			self.state_variables = []
+		else:
+			self.state_variables = state_variables
 
 		# set up decision variables passed in
 		if not decision_variables:
@@ -87,15 +122,18 @@ class DynamicProgram(object):
 
 	def run(self):
 
+		if len(self.decision_variables) == 0 or len(self.state_variables) == 0:
+			raise ValueError("Decision Variables and State Variables must be attached to DynamicProgram before running")
+
 		# build a matrix where everything is 0  - need to figure out what the size of the x axis is
+		# this matrix should just have a column for each timestep (we'll pull these out later), which will then be used by
+		# each stage to actually build its own matrix
 		rows = int(self.time_horizon/self.timestep_size)  # this is the wrong way to do this - the matrix should
 		matrix = numpy.zeros((rows, ))
 
 		for stage in range(rows):
 			for index, row in enumerate(matrix):
 				matrix[index][stage] = support.present_value(index, year=stage*self.timestep_size, discount_rate=self.discount_rate )
-
-		matrix_array = numpy.array(matrix)  # make it a numpy array so we can easily take a vertical slice
 
 		# This next section is old code from a prior simple DP - it will be removed, but was how the set of stages was
 		# built previously so I can see what the usage was like while building this for multiple objectives
