@@ -5,9 +5,13 @@
 	The purpose being that I'd *like* to use the descriptive name for it, but also
 	want to be able to quickly translate equations as needed
 """
-TIME_STEP_SIZE = 40  # years - how often do we make a new decision about levee heights?
-TIME_HORIZON = 200  # years - how far out do we want to look in making decisions?
+import math
 
+PROBABILITY_DISTRIBUTION_LIMITS = [-2, 2]
+PROBABILITY_DISTRIBUTION_DISCRETIZATION_UNITS = 20  # how many blocks should we break the probability distribution up into for calculating probabilities from z scores
+
+TIME_STEP_SIZE = 4  # decades - how often do we make a new decision about levee heights?
+TIME_HORIZON = 20  # decades - how far out do we want to look in making decisions?
 
 Rt = 0.035
 DISCOUNT_RATE = Rt  # inflation adjusted
@@ -45,10 +49,14 @@ MANNINGS_N = Nc
 Bc = 10  # meters
 LEVEE_CROWN_WIDTH = Bc
 
+# help us construct the flow distributions
 mu_0s = 100  # m^3/s
 INITIAL_MEAN_OF_ANNUAL_FLOOD_FLOW = mu_0s  # see note in paper about this value
 sigma_0s = 66  # m^3/s
 INITIAL_SD_OF_ANNUAL_FLOOD_FLOW = sigma_0s
+INITIAL_SAMPLE_SIZE = 25  # given by Jay as the size fo the observations leading to initial mean and SD
+SQRT_INITIAL_SAMPLE_SIZE = math.sqrt(INITIAL_SAMPLE_SIZE)  # just compute it once since we'll use this a lot more than the sample size itself
+SIGMA_OF_SIGMA = 10  # given from Jay - assumption we'll make - growth of the standard deviation
 
 DC = 10000000  # dollars
 FLOOD_DAMAGE_COST_FOR_EACH_FAILURE = DC

@@ -254,3 +254,5 @@ class Stage(object):
 
 		if self.next:
 			self.next.get_optimal_values(prior=number_of_items+prior)
+
+

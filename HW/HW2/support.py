@@ -1,29 +1,138 @@
+import math
+import bisect  # we'll use this to find appropriate z_score probabilities
+
+import numpy
+from scipy import stats
+
 from . import constants
 
 
 class Scenario(object):
-	def __init__(self, name, initial_probability, mean_peak_growth, sd_peak_growth):
+	def __init__(self, name,
+				 initial_probability,
+				 mean_peak_growth,
+				 sd_peak_growth,
+				 sd_sd_growth=constants.SIGMA_OF_SIGMA,
+				 initial_mean=constants.INITIAL_MEAN_OF_ANNUAL_FLOOD_FLOW,
+				 initial_sd=constants.INITIAL_SD_OF_ANNUAL_FLOOD_FLOW):
+
 		self.name = name
 		self.initial_probability = initial_probability
 		self.mean_peak_growth = mean_peak_growth  # mean peak flood growth by decade
-		self.sd_peak_growrth = sd_peak_growth  # standard deviation of peak flood growth by decade
+		self.sd_peak_growth = sd_peak_growth  # standard deviation of peak flood growth by decade
+		self.sd_sd_growth = sd_sd_growth  # growth of the standard deviation itself
 
-	def update(self):
+		# these are the annual flow paremeters in the initial period, but *NOT* the
+		# parameters for the PEAK flows. We use these to construct a lognormal
+		# distribution, to then get the peak flows out of it. The flows are lognormal
+		# but the probability distributions (for the z scores when updating??) are
+		# normal. This is something that needs confirming. See page 6 of Rui's paper
+		self.initial_mean = initial_mean
+		self.initial_sd = initial_sd
+
+		self.prior_probabilities = [initial_probability]
+		self.all_observations = []  # we'll store all observations we've seen here, so we can use it to update
+
+		self.probability_distribution_discretization = numpy.linspace(start=constants.PROBABILITY_DISTRIBUTION_LIMITS[0],
+																	  stop=constants.PROBABILITY_DISTRIBUTION_LIMITS[1],
+																	  num=constants.PROBABILITY_DISTRIBUTION_DISCRETIZATION_UNITS)
+		self.probabilities = {}  # we'll index and store total probabilities here for each item in the probability discretization
+
+		self._index_z_probabilities()
+
+	def _index_z_probabilities(self):
+		total_items = len(self.probability_distribution_discretization)
+		for i, lower_z in enumerate(self.probability_distribution_discretization):
+			if i+1 == total_items:  # don't process the last item - it's the top of a range
+				break
+
+			upper_z = self.probability_distribution_discretization[i+1]
+			lower_z_cum_prob = stats.norm.cdf(lower_z)
+			upper_z_cum_prob = stats.norm.cdf(upper_z)
+			self.probabilities[lower_z] = upper_z_cum_prob - lower_z_cum_prob
+
+	def get_probability(self, z_score):
+
+		# make sure it's in range - if it's greater than the max, use the max. If it's less than the min, use the min
+		z_score = min(z_score, constants.PROBABILITY_DISTRIBUTION_LIMITS[1])
+		z_score = max(z_score, constants.PROBABILITY_DISTRIBUTION_LIMITS[0])
+
+		probability_index = bisect.bisect_right(self.probability_distribution_discretization, z_score) - 1 # get the location of the min z_score involved
+		min_z_score = self.probability_distribution_discretization[probability_index]
+		return self.probabilities[min_z_score]  # returns the probability for that range
+
+	def _value_at_decade(self, value, decade, growth):
 		"""
-			Some sort of Bayesian update code here
+			Provides a compounded, continuous decadal growth.
+		:param value:  The initial value at time 0
+		:param decade:  How many decades in the future we're calculating for
+		:param growth:  The growth rate per decade
+		:return:  Future value with decadally compounded growth
+		"""
+		return value*math.exp(growth*decade)
+
+	def mean_at_decade(self, decade):
+		"""
+			I thought maybe I wasn't calculating this correctly - but maybe
+			that was the old version - not sure. Worth verifying that I'm calculating
+			the correct starting values for each scenario
+		:param decade:
+		:return:
+		"""
+		return self._value_at_decade(self.initial_mean, decade, self.mean_peak_growth)
+
+	def sd_at_decade(self, decade):
+		"""
+			TODO: Talk to someone about how we grow the SD given this and the SIGMA_OF_SIGMA
+		:param decade:
+		:return:
+		"""
+		return self._value_at_decade(self.initial_sd, decade, self.sd_peak_growth)
+
+	def update(self, new_observation, stage):
+		"""
+			Calculates the new, Bayesian probability
+		:param prior_probability:
+		:param new_observation:
+		:param all_observations:
 		:return:
 		"""
 
+		# initial mu and sigma are given in Rui's paper - Mu == 4.42 and Sigma of 0.6
+		# sigma/sqrt(25) is a given value from Jay in the probability equation - see photo from 2/27
+
+		decade = stage * constants.TIME_STEP_SIZE
+		# 1 calculate the current stage mean and standard deviation based on the growth
+		current_mean = self.mean_at_decade(decade)
+		current_sd = self.sd_at_decade(decade)
+
+		# 2 calculate the Z score
+		z_score = float(new_observation - current_mean) / float(current_sd / constants.SQRT_INITIAL_SAMPLE_SIZE)
+
+		# 3 figure out the probability based on z score fit within discretized probability distribution
+		probability = self.get_probability(z_score)
+
+		# 4 Fit this probability into bayes' theorem - our new observed values will be
+		# see kathy's jnotes - we'll want to come up with a way to store the probability
+		# at each stage - we'll use those as the priors. We can then calculate all of this
+		# up front, which we'll then use as multipliers when building our SDP.
+
+		# this next block is wrong, just keeping it for now
+		self.all_observations.append(new_observation)
+		self.prior_probabilities[stage] = float(self.prior_probabilities[stage-1] * new_observation) / sum(self.all_observations)
+
+
 def get_scenarios():
 	scenarios = []
-	scenarios.append(Scenario("A", 0.2, 0, 0))
-	scenarios.append(Scenario("B", 0.2, 0, 0.05))
-	scenarios.append(Scenario("C", 0.2, 0, 0.10))
-	scenarios.append(Scenario("D", 0.2, 0.05, 0))
-	scenarios.append(Scenario("E", 0.1, 0.05, 0.05))
-	scenarios.append(Scenario("F", 0.1, 0.05, 0.10))
+	scenarios.append(Scenario("A", 0.2, 0, 0, sd_sd_growth=constants.SIGMA_OF_SIGMA))
+	scenarios.append(Scenario("B", 0.2, 0, 0.05, sd_sd_growth=constants.SIGMA_OF_SIGMA))
+	scenarios.append(Scenario("C", 0.2, 0, 0.10, sd_sd_growth=constants.SIGMA_OF_SIGMA))
+	scenarios.append(Scenario("D", 0.2, 0.05, 0, sd_sd_growth=constants.SIGMA_OF_SIGMA))
+	scenarios.append(Scenario("E", 0.1, 0.05, 0.05, sd_sd_growth=constants.SIGMA_OF_SIGMA))
+	scenarios.append(Scenario("F", 0.1, 0.05, 0.10, sd_sd_growth=constants.SIGMA_OF_SIGMA))
 
 	return scenarios
+
 
 def present_value(value, year, discount_rate, compounding_rate=1):
 	"""
@@ -77,3 +186,12 @@ def levee_construction_cost(height,
 	return cost
 
 
+def z_score(observation, mu, sigma):
+	"""
+		Just a simple equation to calculate z-scores
+	:param observation:
+	:param mu:
+	:param sigma:
+	:return:
+	"""
+	return float(observation - mu)/sigma
