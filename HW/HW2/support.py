@@ -55,7 +55,7 @@ class Scenario(object):
 		self.mean_probabilities = [0,] * self.number_of_stages
 		self.sd_probabilities = [0,] * self.number_of_stages
 		self.bayesian_numerators = [0,] * self.number_of_stages
-		self.bayesian_probabilities = [0, ] * self.number_of_stages
+		self.bayesian_probabilities = [self.initial_probability, ] * self.number_of_stages
 		#
 
 		self.probability_distribution_discretization = numpy.linspace(start=constants.PROBABILITY_DISTRIBUTION_LIMITS[0],
