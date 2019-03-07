@@ -1,10 +1,15 @@
 import math
 import bisect  # we'll use this to find appropriate z_score probabilities
+import logging
 
 import numpy
 from scipy import stats
 
 from . import constants
+
+
+log = logging.getLogger("levee.support")
+logging.basicConfig()  # we'll want to remove this later, but it's handy for now
 
 
 class Scenario(object):
@@ -14,13 +19,15 @@ class Scenario(object):
 				 sd_peak_growth,
 				 sd_sd_growth=constants.SIGMA_OF_SIGMA,
 				 initial_mean=constants.INITIAL_MEAN_OF_ANNUAL_FLOOD_FLOW,
-				 initial_sd=constants.INITIAL_SD_OF_ANNUAL_FLOOD_FLOW):
+				 initial_sd=constants.INITIAL_SD_OF_ANNUAL_FLOOD_FLOW,
+				 number_of_stages=constants.NUMBER_TIME_STEPS):
 
 		self.name = name
 		self.initial_probability = initial_probability
 		self.mean_peak_growth = mean_peak_growth  # mean peak flood growth by decade
 		self.sd_peak_growth = sd_peak_growth  # standard deviation of peak flood growth by decade
 		self.sd_sd_growth = sd_sd_growth  # growth of the standard deviation itself
+		self.number_of_stages=number_of_stages
 
 		# these are the annual flow paremeters in the initial period, but *NOT* the
 		# parameters for the PEAK flows. We use these to construct a lognormal
@@ -29,16 +36,28 @@ class Scenario(object):
 		# normal. This is something that needs confirming. See page 6 of Rui's paper
 		self.initial_mean = initial_mean
 		self.initial_sd = initial_sd
+		self.initial_probability = initial_probability
 
-		self.prior_probabilities = [initial_probability]
-		self.all_observations = []  # we'll store all observations we've seen here, so we can use it to update
+		# following variables are all keyed by stage number
+		self.mean_at_stage = [initial_mean,] * number_of_stages
+		self.sd_at_stage = [initial_sd,] * number_of_stages
+		self.mean_z_scores = [0,] * number_of_stages
+		self.sd_z_scores = [0,] * number_of_stages
+		self.mean_probabilities = [0,] * number_of_stages
+		self.sd_probabilities = [0,] * number_of_stages
+		self.bayesian_numerators = [0,] * number_of_stages
+		self.bayesian_probabilities = [0, ] * number_of_stages
+		#
 
 		self.probability_distribution_discretization = numpy.linspace(start=constants.PROBABILITY_DISTRIBUTION_LIMITS[0],
 																	  stop=constants.PROBABILITY_DISTRIBUTION_LIMITS[1],
 																	  num=constants.PROBABILITY_DISTRIBUTION_DISCRETIZATION_UNITS)
 		self.probabilities = {}  # we'll index and store total probabilities here for each item in the probability discretization
 
+		log.info("Indexing probabilities")
 		self._index_z_probabilities()
+		for stage in range(1, self.number_of_stages):  # fill the stage data
+			self.new_stage_observation(stage)
 
 	def _index_z_probabilities(self):
 		total_items = len(self.probability_distribution_discretization)
@@ -51,13 +70,14 @@ class Scenario(object):
 			upper_z_cum_prob = stats.norm.cdf(upper_z)
 			self.probabilities[lower_z] = upper_z_cum_prob - lower_z_cum_prob
 
-	def get_probability(self, z_score):
+	def get_probability(self, prob_z_score):
 
 		# make sure it's in range - if it's greater than the max, use the max. If it's less than the min, use the min
-		z_score = min(z_score, constants.PROBABILITY_DISTRIBUTION_LIMITS[1])
-		z_score = max(z_score, constants.PROBABILITY_DISTRIBUTION_LIMITS[0])
+		prob_z_score = min(prob_z_score, constants.PROBABILITY_DISTRIBUTION_LIMITS[1])
+		prob_z_score = max(prob_z_score, constants.PROBABILITY_DISTRIBUTION_LIMITS[0])
 
-		probability_index = bisect.bisect_right(self.probability_distribution_discretization, z_score) - 1 # get the location of the min z_score involved
+		# we subset the discretization because the last item doesn't actually have a key - it's rolled into the previous one
+		probability_index = bisect.bisect_right(self.probability_distribution_discretization[:-1], prob_z_score) - 1 # get the location of the min z_score involved
 		min_z_score = self.probability_distribution_discretization[probability_index]
 		return self.probabilities[min_z_score]  # returns the probability for that range
 
@@ -89,12 +109,10 @@ class Scenario(object):
 		"""
 		return self._value_at_decade(self.initial_sd, decade, self.sd_peak_growth)
 
-	def update(self, new_observation, stage):
+	def new_stage_observation(self, stage):
 		"""
 			Calculates the new, Bayesian probability
-		:param prior_probability:
-		:param new_observation:
-		:param all_observations:
+		:param stage: int
 		:return:
 		"""
 
@@ -103,33 +121,49 @@ class Scenario(object):
 
 		decade = stage * constants.TIME_STEP_SIZE
 		# 1 calculate the current stage mean and standard deviation based on the growth
-		current_mean = self.mean_at_decade(decade)
-		current_sd = self.sd_at_decade(decade)
+		self.mean_at_stage[stage] = self.mean_at_decade(decade)
+		self.sd_at_stage[stage] = self.sd_at_decade(decade)
 
-		# 2 calculate the Z score
-		z_score = float(new_observation - current_mean) / float(current_sd / constants.SQRT_INITIAL_SAMPLE_SIZE)
+		# 2 calculate the Z scores - I think I'm doing this a bit wrong right now
+		self.mean_z_scores[stage] = z_score(self.mean_at_stage[stage], self.mean_at_stage[0], self.sd_at_stage[0])
+		self.sd_z_scores[stage] = z_score(self.sd_at_stage[stage], self.sd_at_stage[0], self.sd_at_stage[0])
 
 		# 3 figure out the probability based on z score fit within discretized probability distribution
-		probability = self.get_probability(z_score)
+		self.mean_probabilities[stage] = self.get_probability(self.mean_z_scores[stage])
+		self.sd_probabilities[stage] = self.get_probability(self.sd_z_scores[stage])
+
+		self.bayesian_numerators[stage] = self.initial_probability * self.mean_probabilities[stage] * self.sd_probabilities[stage]
+		log.info("Bayesian numerator for Scenario {} at Stage {}: {}".format(self.name, stage, self.bayesian_numerators[stage]))
 
 		# 4 Fit this probability into bayes' theorem - our new observed values will be
 		# see kathy's jnotes - we'll want to come up with a way to store the probability
 		# at each stage - we'll use those as the priors. We can then calculate all of this
 		# up front, which we'll then use as multipliers when building our SDP.
 
-		# this next block is wrong, just keeping it for now
-		self.all_observations.append(new_observation)
-		self.prior_probabilities[stage] = float(self.prior_probabilities[stage-1] * new_observation) / sum(self.all_observations)
 
+def get_scenarios(number_of_stages=constants.NUMBER_TIME_STEPS):
 
-def get_scenarios():
 	scenarios = []
-	scenarios.append(Scenario("A", 0.2, 0, 0, sd_sd_growth=constants.SIGMA_OF_SIGMA))
-	scenarios.append(Scenario("B", 0.2, 0, 0.05, sd_sd_growth=constants.SIGMA_OF_SIGMA))
-	scenarios.append(Scenario("C", 0.2, 0, 0.10, sd_sd_growth=constants.SIGMA_OF_SIGMA))
-	scenarios.append(Scenario("D", 0.2, 0.05, 0, sd_sd_growth=constants.SIGMA_OF_SIGMA))
-	scenarios.append(Scenario("E", 0.1, 0.05, 0.05, sd_sd_growth=constants.SIGMA_OF_SIGMA))
-	scenarios.append(Scenario("F", 0.1, 0.05, 0.10, sd_sd_growth=constants.SIGMA_OF_SIGMA))
+	scenarios.append(Scenario("A", 0.2, 0, 0, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
+	scenarios.append(Scenario("B", 0.2, 0, 0.05, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
+	scenarios.append(Scenario("C", 0.2, 0, 0.10, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
+	scenarios.append(Scenario("D", 0.2, 0.05, 0, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
+	scenarios.append(Scenario("E", 0.1, 0.05, 0.05, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
+	scenarios.append(Scenario("F", 0.1, 0.05, 0.10, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
+
+	# Now calculate the sums of the numerators for each bayesian stage so we can make our denominator
+	denominators = [0]
+	for stage in range(1, number_of_stages):
+		stage_list = []
+		for scenario in scenarios:
+			stage_list.append(scenario.bayesian_numerators[stage])
+		denominators.append(sum(stage_list))
+		log.info("Denominator at stage {} is {}".format(stage, denominators[-1]))
+
+	for stage in range(1, number_of_stages):
+		for scenario in scenarios:
+			scenario.bayesian_probabilities[stage] = float(scenario.bayesian_numerators[stage]) / denominators[stage]
+			log.info("Bayesian probability for scenario {} at stage {}: {}".format(scenario.name, stage, scenario.bayesian_probabilities[stage]))
 
 	return scenarios
 
@@ -186,7 +220,7 @@ def levee_construction_cost(height,
 	return cost
 
 
-def z_score(observation, mu, sigma):
+def z_score(observation, mu, sigma, sqrt_of_sample_size=constants.SQRT_INITIAL_SAMPLE_SIZE):
 	"""
 		Just a simple equation to calculate z-scores
 	:param observation:
@@ -194,4 +228,4 @@ def z_score(observation, mu, sigma):
 	:param sigma:
 	:return:
 	"""
-	return float(observation - mu)/sigma
+	return float(observation - mu)/float(sigma/sqrt_of_sample_size)

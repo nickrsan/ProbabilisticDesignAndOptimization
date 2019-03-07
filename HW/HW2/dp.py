@@ -1,6 +1,9 @@
 import numpy
+import logging
 
 import support
+
+log = logging.getLogger("dp")
 
 MAXIMIZE = max
 MINIMIZE = min

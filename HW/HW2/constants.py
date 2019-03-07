@@ -6,12 +6,16 @@
 	want to be able to quickly translate equations as needed
 """
 import math
+import logging
+
+log = logging.getLogger("levee.constants")
 
 PROBABILITY_DISTRIBUTION_LIMITS = [-2, 2]
 PROBABILITY_DISTRIBUTION_DISCRETIZATION_UNITS = 20  # how many blocks should we break the probability distribution up into for calculating probabilities from z scores
 
 TIME_STEP_SIZE = 4  # decades - how often do we make a new decision about levee heights?
 TIME_HORIZON = 20  # decades - how far out do we want to look in making decisions?
+NUMBER_TIME_STEPS = int(TIME_HORIZON/TIME_STEP_SIZE)
 
 Rt = 0.035
 DISCOUNT_RATE = Rt  # inflation adjusted
