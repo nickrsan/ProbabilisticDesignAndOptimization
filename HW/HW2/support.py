@@ -198,8 +198,44 @@ def levee_overtopping_cost():
 
 
 def levee_failure_cost():
+	"""
+		Cost of geotechnical failure
+	:return:
+	"""
 	pass
 
+
+def levee_raise_cost(incremental_height,):
+	"""
+		Cost of raising a levee incremental_height meters
+	:param incremental_height:
+	:return:
+	"""
+
+
+def maintenance_cost_stage(length=constants.LEVEE_SYSTEM_LENGTH,
+						   cost_per_length=constants.MAINTENANCE_COST_PER_METER,
+						   period_length=constants.TIME_STEP_SIZE*10,
+						   discount_rate=constants.DISCOUNT_RATE):
+	"""
+		Gets the maintenance cost for the entire stage, discounted to the beginning of the stage
+
+		This only needs to be run once and then incorporated into all calculations with a levee height greater than 0
+		since for every stage/height the value will be the same, and the DP will handle discounting it back to present day
+		for stages past the first
+	:param length:
+	:param cost_per_length:
+	:param period_length:
+	:param discount_rate:
+	:return:
+	"""
+	annual_cost = length * cost_per_length
+	total_cost = annual_cost  # assign the base annual cost for year 0
+
+	for year in range(1, period_length+1):
+		total_cost += present_value(annual_cost, year, discount_rate)
+
+	return total_cost
 
 def levee_construction_cost(height,
 							build_year,
@@ -216,7 +252,7 @@ def levee_construction_cost(height,
 		TODO: NEED TO TAKE INTO ACCOUNT THE SLOPE UNDERNEATH AND HOW THAT REDUCES SOIL NEEDS.
 
 	:param height: Height of levee above the floodplain - in meters
-	:param build_year: when are we building the levee (in years from now). Used for discounting
+	:param build_year: when are we building the levee (in years from now). Used for discounting. Likely to be 0 since this is for initial builds
 	:param length:  the length in meters of the levee to build
 	:param slope:  the slope of the levee itself
 	:param crown_width:  # how thick the top of the levee is
