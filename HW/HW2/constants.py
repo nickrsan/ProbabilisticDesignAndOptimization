@@ -10,8 +10,9 @@ import logging
 
 log = logging.getLogger("levee.constants")
 
-PROBABILITY_DISTRIBUTION_LIMITS = [-2, 2]
-PROBABILITY_DISTRIBUTION_DISCRETIZATION_UNITS = 20  # how many blocks should we break the probability distribution up into for calculating probabilities from z scores
+# When getting probabilities from z scores during bayesian updating, how far out on the tails should we go before capping it, and how much should we group similar areas?
+PROBABILITY_DISTRIBUTION_LIMITS = [-3, 3]
+PROBABILITY_DISTRIBUTION_DISCRETIZATION_UNITS = 30  # how many blocks should we break the probability distribution up into for calculating probabilities from z scores
 
 TIME_STEP_SIZE = 4  # decades - how often do we make a new decision about levee heights?
 TIME_HORIZON = 20  # decades - how far out do we want to look in making decisions?

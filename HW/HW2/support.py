@@ -1,16 +1,24 @@
 import math
 import bisect  # we'll use this to find appropriate z_score probabilities
 import logging
+import sys
 
 import numpy
 from scipy import stats
 
 from . import constants
 
+# set up logging
+root_log = logging.getLogger()
+if len(root_log.handlers) == 0:  # if we haven't already set up logging, set it up
+	root_log.setLevel(logging.DEBUG)
+	log_stream_handler = logging.StreamHandler(sys.stdout)
+	log_stream_handler.setLevel(logging.DEBUG)
+	log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+	log_stream_handler.setFormatter(log_formatter)
+	root_log.addHandler(log_stream_handler)
 
 log = logging.getLogger("levee.support")
-logging.basicConfig()  # we'll want to remove this later, but it's handy for now
-
 
 class Scenario(object):
 	def __init__(self, name,
@@ -23,11 +31,12 @@ class Scenario(object):
 				 number_of_stages=constants.NUMBER_TIME_STEPS):
 
 		self.name = name
+		self.log = logging.getLogger("levee.support.scenario_{}".format(name))
 		self.initial_probability = initial_probability
 		self.mean_peak_growth = mean_peak_growth  # mean peak flood growth by decade
 		self.sd_peak_growth = sd_peak_growth  # standard deviation of peak flood growth by decade
 		self.sd_sd_growth = sd_sd_growth  # growth of the standard deviation itself
-		self.number_of_stages=number_of_stages
+		self.number_of_stages = number_of_stages+1  # add 1 because stage 0 doesn't count here
 
 		# these are the annual flow paremeters in the initial period, but *NOT* the
 		# parameters for the PEAK flows. We use these to construct a lognormal
@@ -39,14 +48,14 @@ class Scenario(object):
 		self.initial_probability = initial_probability
 
 		# following variables are all keyed by stage number
-		self.mean_at_stage = [initial_mean,] * number_of_stages
-		self.sd_at_stage = [initial_sd,] * number_of_stages
-		self.mean_z_scores = [0,] * number_of_stages
-		self.sd_z_scores = [0,] * number_of_stages
-		self.mean_probabilities = [0,] * number_of_stages
-		self.sd_probabilities = [0,] * number_of_stages
-		self.bayesian_numerators = [0,] * number_of_stages
-		self.bayesian_probabilities = [0, ] * number_of_stages
+		self.mean_at_stage = [initial_mean,] * self.number_of_stages
+		self.sd_at_stage = [initial_sd,] * self.number_of_stages
+		self.mean_z_scores = [0,] * self.number_of_stages
+		self.sd_z_scores = [0,] * self.number_of_stages
+		self.mean_probabilities = [0,] * self.number_of_stages
+		self.sd_probabilities = [0,] * self.number_of_stages
+		self.bayesian_numerators = [0,] * self.number_of_stages
+		self.bayesian_probabilities = [0, ] * self.number_of_stages
 		#
 
 		self.probability_distribution_discretization = numpy.linspace(start=constants.PROBABILITY_DISTRIBUTION_LIMITS[0],
@@ -54,7 +63,7 @@ class Scenario(object):
 																	  num=constants.PROBABILITY_DISTRIBUTION_DISCRETIZATION_UNITS)
 		self.probabilities = {}  # we'll index and store total probabilities here for each item in the probability discretization
 
-		log.info("Indexing probabilities")
+		self.log.info("Indexing probabilities")
 		self._index_z_probabilities()
 		for stage in range(1, self.number_of_stages):  # fill the stage data
 			self.new_stage_observation(stage)
@@ -119,21 +128,23 @@ class Scenario(object):
 		# initial mu and sigma are given in Rui's paper - Mu == 4.42 and Sigma of 0.6
 		# sigma/sqrt(25) is a given value from Jay in the probability equation - see photo from 2/27
 
+		self.log.debug("New observation for stage {}".format(stage))
+
 		decade = stage * constants.TIME_STEP_SIZE
 		# 1 calculate the current stage mean and standard deviation based on the growth
 		self.mean_at_stage[stage] = self.mean_at_decade(decade)
 		self.sd_at_stage[stage] = self.sd_at_decade(decade)
 
 		# 2 calculate the Z scores - I think I'm doing this a bit wrong right now
-		self.mean_z_scores[stage] = z_score(self.mean_at_stage[stage], self.mean_at_stage[0], self.sd_at_stage[0])
-		self.sd_z_scores[stage] = z_score(self.sd_at_stage[stage], self.sd_at_stage[0], self.sd_at_stage[0])
+		self.mean_z_scores[stage] = z_score(self.mean_at_stage[stage], self.mean_at_stage[stage-1], self.sd_at_stage[stage-1])
+		self.sd_z_scores[stage] = z_score(self.sd_at_stage[stage], self.sd_at_stage[stage-1], self.sd_sd_growth)
 
 		# 3 figure out the probability based on z score fit within discretized probability distribution
 		self.mean_probabilities[stage] = self.get_probability(self.mean_z_scores[stage])
 		self.sd_probabilities[stage] = self.get_probability(self.sd_z_scores[stage])
 
 		self.bayesian_numerators[stage] = self.initial_probability * self.mean_probabilities[stage] * self.sd_probabilities[stage]
-		log.info("Bayesian numerator for Scenario {} at Stage {}: {}".format(self.name, stage, self.bayesian_numerators[stage]))
+		self.log.info("Bayesian numerator at Stage {}: {}".format(self.name, stage, self.bayesian_numerators[stage]))
 
 		# 4 Fit this probability into bayes' theorem - our new observed values will be
 		# see kathy's jnotes - we'll want to come up with a way to store the probability
@@ -153,17 +164,19 @@ def get_scenarios(number_of_stages=constants.NUMBER_TIME_STEPS):
 
 	# Now calculate the sums of the numerators for each bayesian stage so we can make our denominator
 	denominators = [0]
-	for stage in range(1, number_of_stages):
+	for stage in range(1, number_of_stages+1):
 		stage_list = []
 		for scenario in scenarios:
 			stage_list.append(scenario.bayesian_numerators[stage])
+		log.debug("Stage list: {}".format(stage_list))
 		denominators.append(sum(stage_list))
 		log.info("Denominator at stage {} is {}".format(stage, denominators[-1]))
 
-	for stage in range(1, number_of_stages):
+	for stage in range(1, number_of_stages+1):
+		log.debug("Getting Bayesian probabilities for stage {}".format(stage))
 		for scenario in scenarios:
 			scenario.bayesian_probabilities[stage] = float(scenario.bayesian_numerators[stage]) / denominators[stage]
-			log.info("Bayesian probability for scenario {} at stage {}: {}".format(scenario.name, stage, scenario.bayesian_probabilities[stage]))
+			log.info("Scenario {}, stage {}: {}".format(scenario.name, stage, scenario.bayesian_probabilities[stage]))
 
 	return scenarios
 
