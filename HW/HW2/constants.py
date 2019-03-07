@@ -10,6 +10,8 @@ import logging
 
 log = logging.getLogger("levee.constants")
 
+EXCLUSION_VALUE = 9223372036854775808  # max value for a signed 64 bit int - this should force it to not be selected in minimization
+
 # When getting probabilities from z scores during bayesian updating, how far out on the tails should we go before capping it, and how much should we group similar areas?
 PROBABILITY_DISTRIBUTION_LIMITS = [-3, 3]
 PROBABILITY_DISTRIBUTION_DISCRETIZATION_UNITS = 30  # how many blocks should we break the probability distribution up into for calculating probabilities from z scores

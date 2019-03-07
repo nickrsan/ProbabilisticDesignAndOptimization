@@ -193,6 +193,43 @@ def present_value(value, year, discount_rate, compounding_rate=1):
 	return value * (1 + float(discount_rate)/float(compounding_rate)) ** (-year*compounding_rate)
 
 
+def building_and_maintenance_costs(initial_height, incremental_height):
+
+	# build costs
+	if initial_height == 0:  # when we don't have a levee, then our costs are different - we're not raising, we're doing initial construction
+		build_cost = levee_construction_cost(incremental_height, build_year=0)
+	else:
+		build_cost = levee_raise_cost(initial_height, incremental_height)
+
+	return build_cost + MAINTENANCE_COST
+
+
+def total_costs_of_choice(scenarios, initial_height, incremental_height, stage):
+	"""
+
+	:param scenarios:
+	:param initial_height:
+	:param incremental_height:
+	:param stage: Helps us annualize it - if it's the last stage, then we do it differently because it's annualized FOREVER
+	:return:
+	"""
+
+	if initial_height + incremental_height > constants.MAXIMUM_LEVEE_HEIGHT:  # if this combination isn't allowed because it makes the levee too tall
+		return constants.EXCLUSION_VALUE  # then return that it's just really expensive to raise it like this - fast if we just exclude it right off the bat
+
+	# run the building and maintenance cost code ONCE, store the value
+
+	# for each scenario, get the costs of overtopping and failure for the new height multiplied by the bayesian probability
+
+		# cost of overtopping
+
+		# cost of geotechnical failure
+
+	# sum the two (construction and failure
+
+	# annualize it over the entire period
+
+
 def levee_overtopping_cost():
 	pass
 
@@ -205,12 +242,19 @@ def levee_failure_cost():
 	pass
 
 
-def levee_raise_cost(incremental_height,):
+def levee_raise_cost(current_height, incremental_height,):
 	"""
 		Cost of raising a levee incremental_height meters
+	:param: current_height
 	:param incremental_height:
 	:return:
 	"""
+
+	return _levee_volume_cost(_levee_volume_change(current_height, incremental_height,
+													length=constants.LEVEE_SYSTEM_LENGTH,
+													slope=constants.LAND_SIDE_SLOPE,
+													crown_width=constants.LEVEE_CROWN_WIDTH,
+													number_of_sides=2,),)
 
 
 def maintenance_cost_stage(length=constants.LEVEE_SYSTEM_LENGTH,
@@ -237,6 +281,42 @@ def maintenance_cost_stage(length=constants.LEVEE_SYSTEM_LENGTH,
 
 	return total_cost
 
+MAINTENANCE_COST = maintenance_cost_stage()  # make it a constant so we can just reference it
+
+
+def _levee_volume_cost(volume,
+					   year=0,
+						material_cost=constants.COST_OF_SOIL,
+						construction_multiplier=constants.CONSTRUCTION_COST_MULTIPLIER,
+						discount_rate=constants.DISCOUNT_RATE):
+
+	return volume * present_value(material_cost*construction_multiplier, year=year, discount_rate=discount_rate)
+
+
+def _levee_volume(height,
+					length=constants.LEVEE_SYSTEM_LENGTH,
+					slope=constants.LAND_SIDE_SLOPE,
+					crown_width=constants.LEVEE_CROWN_WIDTH,
+					number_of_sides=2,):
+
+	base_width = crown_width + (1/slope * height)
+	xc_area = (crown_width+base_width)/2 * height
+	return xc_area * length * number_of_sides
+
+
+def _levee_volume_change(initial_height, incremental_height,
+						 length=constants.LEVEE_SYSTEM_LENGTH,
+						slope=constants.LAND_SIDE_SLOPE,
+						crown_width=constants.LEVEE_CROWN_WIDTH,
+						number_of_sides=2,):
+
+	new_height = initial_height + incremental_height
+	old_volume = _levee_volume(initial_height, length, slope, crown_width, number_of_sides)
+	new_volume = _levee_volume(new_height, length, slope, crown_width, number_of_sides)
+
+	return new_volume-old_volume
+
+
 def levee_construction_cost(height,
 							build_year,
 							length=constants.LEVEE_SYSTEM_LENGTH,
@@ -261,10 +341,9 @@ def levee_construction_cost(height,
 	:param construction_multiplier:  How much should fixed costs be multiplied by to get true cost of construction
 	:return:
 	"""
-	base_width = crown_width + (1/slope * height)
-	xc_area = (crown_width+base_width)/2 * height
-	volume = xc_area * length & number_of_sides
-	cost = volume * present_value(material_cost*construction_multiplier, year=build_year, discount_rate=discount_rate)
+
+	volume = _levee_volume(height, length, slope, crown_width, number_of_sides)
+	cost = _levee_volume_cost(volume, build_year, material_cost, construction_multiplier, discount_rate)
 
 	return cost
 
