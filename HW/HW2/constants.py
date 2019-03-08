@@ -51,7 +51,8 @@ Sc = 0.0005
 LONGITUDINAL_SLOPE_OF_CHANNEL = Sc
 
 Nc = 0.05  # mannings coefficient
-MANNINGS_N = Nc
+MANNINGS_N = Nc  # roughness factor, basically
+MANNING_CONVERSION_FACTOR = 1.0   # a conversion factor - would be 1.4859 if it's English Units (according to Rui)
 
 Bc = 10  # meters
 LEVEE_CROWN_WIDTH = Bc

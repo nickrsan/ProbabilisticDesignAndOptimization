@@ -221,18 +221,26 @@ def present_value(value, year, discount_rate, compounding_rate=1):
 	return value * (1 + float(discount_rate)/float(compounding_rate)) ** (-year*compounding_rate)
 
 
-def building_and_maintenance_costs(initial_height, incremental_height):
+def building_and_maintenance_costs(initial_height, incremental_height, construction_cost_multiplier=constants.CONSTRUCTION_COST_MULTIPLIER):
+	"""
+	TODO: Might need to move the construction cost multiplier elsewhere
 
+	:param initial_height:
+	:param incremental_height:
+	:param construction_cost_multiplier:
+	:return:
+	"""
 	# build costs
 	if initial_height == 0:  # when we don't have a levee, then our costs are different - we're not raising, we're doing initial construction
-		build_cost = levee_construction_cost(incremental_height, build_year=0)
+		build_cost = levee_construction_cost(incremental_height, build_year=0) * construction_cost_multiplier
 	else:
+		# assuming alterations don't have the cost multiplier because they have a fixed cost
 		build_cost = levee_raise_cost(initial_height, incremental_height)
 
 	return build_cost + MAINTENANCE_COST
 
 
-def total_costs_of_choice(scenarios, initial_height, incremental_height, stage):
+def total_costs_of_choice(scenarios, initial_height, incremental_height, stage, observered_mean_flow, observed_flood_peak_variance):
 	"""
 
 	:param scenarios:
@@ -246,7 +254,7 @@ def total_costs_of_choice(scenarios, initial_height, incremental_height, stage):
 		return constants.EXCLUSION_VALUE  # then return that it's just really expensive to raise it like this - fast if we just exclude it right off the bat
 
 	# run the building and maintenance cost code ONCE, store the value
-
+	cost = building_and_maintenance_costs(initial_height=initial_height, incremental_height=incremental_height)
 	# for each scenario, get the costs of overtopping and failure for the new height multiplied by the bayesian probability
 
 		# cost of overtopping
@@ -259,7 +267,12 @@ def total_costs_of_choice(scenarios, initial_height, incremental_height, stage):
 
 
 def levee_overtopping_cost():
-	pass
+	"""
+		Rui's paper doesn't do much to distinguish between this and geotechnical failure costs.
+		Keeping them as separate functions for now so that we can
+	:return:
+	"""
+	return constants.FLOOD_DAMAGE_COST_FOR_EACH_FAILURE
 
 
 def levee_failure_cost():
@@ -267,22 +280,26 @@ def levee_failure_cost():
 		Cost of geotechnical failure
 	:return:
 	"""
-	pass
+	return constants.FLOOD_DAMAGE_COST_FOR_EACH_FAILURE
 
 
 def levee_raise_cost(current_height, incremental_height,):
 	"""
-		Cost of raising a levee incremental_height meters
+		Cost of raising a levee incremental_height meters plus the fixed cost of alteration
 	:param: current_height
 	:param incremental_height:
 	:return:
 	"""
 
-	return _levee_volume_cost(_levee_volume_change(current_height, incremental_height,
+	changes = _levee_volume_change(current_height, incremental_height,
 													length=constants.LEVEE_SYSTEM_LENGTH,
 													slope=constants.LAND_SIDE_SLOPE,
 													crown_width=constants.LEVEE_CROWN_WIDTH,
-													number_of_sides=2,),)
+													number_of_sides=2,)
+	cost = _levee_volume_cost(changes['volume_change'])
+	cost += constants.FIXED_LEVEE_ALTERATION_COST  # add the cost of any construction project
+	cost += changes['area_change'] * constants.LAND_PRICE  # add the cost of additional land that this levee sits on
+
 
 
 def maintenance_cost_stage(length=constants.LEVEE_SYSTEM_LENGTH,
@@ -315,10 +332,9 @@ MAINTENANCE_COST = maintenance_cost_stage()  # make it a constant so we can just
 def _levee_volume_cost(volume,
 					   year=0,
 						material_cost=constants.COST_OF_SOIL,
-						construction_multiplier=constants.CONSTRUCTION_COST_MULTIPLIER,
 						discount_rate=constants.DISCOUNT_RATE):
 
-	return volume * present_value(material_cost*construction_multiplier, year=year, discount_rate=discount_rate)
+	return volume * present_value(material_cost, year=year, discount_rate=discount_rate)
 
 
 def _levee_volume(height,
@@ -329,7 +345,7 @@ def _levee_volume(height,
 
 	base_width = crown_width + (1/slope * height)
 	xc_area = (crown_width+base_width)/2 * height
-	return xc_area * length * number_of_sides
+	return {'area': xc_area * number_of_sides, 'volume': xc_area * length * number_of_sides}
 
 
 def _levee_volume_change(initial_height, incremental_height,
@@ -342,7 +358,9 @@ def _levee_volume_change(initial_height, incremental_height,
 	old_volume = _levee_volume(initial_height, length, slope, crown_width, number_of_sides)
 	new_volume = _levee_volume(new_height, length, slope, crown_width, number_of_sides)
 
-	return new_volume-old_volume
+	return {'area_change': new_volume['area'] - old_volume['area'],
+			'volume_change': new_volume['volume'] - old_volume['volume']
+			}
 
 
 def levee_construction_cost(height,
@@ -352,7 +370,6 @@ def levee_construction_cost(height,
 							crown_width=constants.LEVEE_CROWN_WIDTH,
 							number_of_sides=2,
 							material_cost=constants.COST_OF_SOIL,
-							construction_multiplier=constants.CONSTRUCTION_COST_MULTIPLIER,
 							discount_rate=constants.DISCOUNT_RATE):
 	"""
 		Calculates the cost of building a levee.
@@ -370,10 +387,41 @@ def levee_construction_cost(height,
 	:return:
 	"""
 
-	volume = _levee_volume(height, length, slope, crown_width, number_of_sides)
-	cost = _levee_volume_cost(volume, build_year, material_cost, construction_multiplier, discount_rate)
-
+	area_and_volume = _levee_volume(height, length, slope, crown_width, number_of_sides)
+	cost = _levee_volume_cost(area_and_volume['volume'], build_year, material_cost, discount_rate)
+	cost += area_and_volume['area'] * constants.LAND_PRICE  # add the cost of purchasing land to the construction
 	return cost
+
+
+# Flow corresponding to aNY specific water level (from bottom of the river), calculated by Manning's Equation
+def get_overflow(water_height):
+	"""
+		This is Rui's function for this exactly, incorporated here and adapted to my variable names
+	:param water_height:
+	:return:
+	"""
+
+	Hfp = (constants.LEVEED_CHANNEL_WIDTH_TO_TOE - constants.LEVEED_CHANNEL_WIDTH) * constants.FLOODPLAIN_SLOPE  # Floodplain height
+	Htoe = constants.CHANNEL_DEPTH + Hfp  # Water level at the toe of the levee
+
+	if water_height >= Htoe:  # If water level is above the toe and below the top of the levee
+		CrossSection = constants.LEVEED_CHANNEL_WIDTH * constants.CHANNEL_DEPTH + (constants.LEVEED_CHANNEL_WIDTH + constants.LEVEED_CHANNEL_WIDTH_TO_TOE) * Hfp / 2 + (2*constants.LEVEED_CHANNEL_WIDTH_TO_TOE + 2 * (water_height - Htoe) / constants.WATER_SIDE_SLOPE) * (water_height - Htoe) / 2
+		# Cross section area of flow at water_height depth
+		WettedP = constants.LEVEED_CHANNEL_WIDTH + 2 * constants.CHANNEL_DEPTH + 2 * math.sqrt(((constants.LEVEED_CHANNEL_WIDTH_TO_TOE - constants.LEVEED_CHANNEL_WIDTH) / 2) ** 2 + (Hfp) ** 2) + 2 * math.sqrt(
+			((water_height - Htoe) / constants.WATER_SIDE_SLOPE) ** 2 + (water_height - Htoe) ** 2)
+		# Wetted perimeter
+	else:
+		if water_height >= constants.CHANNEL_DEPTH:  # If water level is above the channel depth and below the toe of the levee
+			CrossSection = constants.LEVEED_CHANNEL_WIDTH * constants.CHANNEL_DEPTH + (2 * constants.LEVEED_CHANNEL_WIDTH + 2 * (water_height - constants.CHANNEL_DEPTH) / constants.FLOODPLAIN_SLOPE) * (water_height - constants.CHANNEL_DEPTH) / 2
+			# Cross section area of flow at water_height depth
+			WettedP = constants.LEVEED_CHANNEL_WIDTH + 2 * constants.CHANNEL_DEPTH + 2 * math.sqrt(((water_height - constants.CHANNEL_DEPTH) / constants.FLOODPLAIN_SLOPE) ** 2 + (water_height - constants.CHANNEL_DEPTH) ** 2)
+			# Wetted perimeter
+		else:
+			CrossSection = water_height * constants.LEVEED_CHANNEL_WIDTH  # Cross section area of flow at water_height depth
+			WettedP = 2 * water_height + constants.LEVEED_CHANNEL_WIDTH  # Wetted perimeter
+	Velocity = constants.MANNING_CONVERSION_FACTOR / constants.MANNINGS_N * (CrossSection / WettedP) ** (2 / 3) * math.sqrt(constants.LONGITUDINAL_SLOPE_OF_CHANNEL)  # Water velocity
+	overflow = Velocity * CrossSection  # Flow
+	return overflow
 
 
 def z_score(observation, mu, sigma, sqrt_of_sample_size=constants.SQRT_INITIAL_SAMPLE_SIZE):
