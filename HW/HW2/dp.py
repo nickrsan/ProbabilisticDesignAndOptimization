@@ -1,3 +1,39 @@
+"""
+	Dynamic Program class - implements only backward dynamic programming.
+	Ideal usage is to have an objective function defined by the user, however they'd like.
+
+	The user defines as many StateVariable instances as they have state variables in their DP and they define
+	a DecisionVariable. The objective function should be prepared to take arguments with keyword values for each of
+	these, where the keyword is determined by the name attribute on each instance. It then returns a value.
+
+	For situations with multiple state variables, we have reducers, which, prior to minimization or maximization
+	will reduce the number of state variables to one so that we can get a single F* for each input scenario.
+	This is a class Reducer with a defined interface, and can then be extended. For our levee problem, we have a
+	ProbabilisticReducer which keeps track of the probability of each set of state variables and can collapse by
+	a master variable. Probabilities must be provided by the user.
+
+	At that point, usage for the levee problem should be something like:
+
+	```
+	import support  # user's extra code to support the objective function
+	import dp
+
+	objective_function = support.objective_function
+	height_var = dp.StateVariable("height")
+	flow_var = dp.StateVariable("peak_flow")
+	variance_var = dp.StateVariable("variance")
+	decision_var = dp.DecisionVariable()
+
+	# TODO: Missing plan for how we assign probabilities here - needs to be incorporated somewhere
+
+	dynamic_program = dp.DynamicProgram(objective_function=objective_function,
+										state_variables=(height_var, flow_var, variance_var),
+										decison_variable=decision_var)
+	dynamic_program.optimize()  # runs the backward recursion
+	dynamic_program.get_optimal_values()  # runs the forward method to obtain choices
+	```
+"""
+
 import numpy
 import logging
 
@@ -9,12 +45,40 @@ MAXIMIZE = max
 MINIMIZE = min
 
 
+class Reducer(object):
+	"""
+		Reduces multiple state variables to a single state variable so we can just minimize
+	"""
+	pass
+
+
+class VariableReducer(Reducer):
+	"""
+		Given a StateVariable, reduces the table size by collapsing all other variables - can do this by min/max/mean/sum
+		of all options.
+
+		Saving implementation here until after we have a better sense for how the rest of this will be implemented
+	"""
+	def __init__(self, variable, stage):
+		self.variable = variable  # reference to StateVariable object
+		self.stage = stage  # reference to Stage object
+
+
+class ProbabilisticReducer(Reducer):
+	"""
+		Given a StateVariable to process (S), and a set of StateVariables to hold constant (Cs), reduces S for each
+		combination of Cs by multiplying the objective values in the records for S by their probabilities and summing them.
+
+		We should be able to actually just make this have a single column for probabilities so that we can do the same
+		thing we planned to do for the variable reducer and just (ignoring the first paragraph of this docstring)
+		select a master variable, get all rows for it, multiply those rows by the probability field, and sum them up.
+	"""
+	pass
+
 class StateVariable(object):
 	"""
 		Not sure what I'm going to do with this yet, but I think we'll need it in order to have rows for interactions
 		between multiple state variables.
-
-		We'll probably want to do something with the probabilities and bayesian updating in this class.
 
 		When we go to use all the state variables together, we'll need to discretize them each, and then we'll need to combine
 		them to get all the rows in the table for each stage. Assuming we have some attribute .discretized that contains
@@ -22,10 +86,18 @@ class StateVariable(object):
 		.state_variables, we can get all possible combinations for generating a row using `itertools.product(*[var.discretized for var in self.state_variables])`
 		Note the asterisk at the front, which takes that list and expands it so each one is an individual argument to
 		itertools.product
+
+		We can then use this by taking the name attribute of the state variable and passing it as the kwarg to the objective
+		function along with the discretized value. So then we have a DP class that accepts a list of variables, an objective
+		function, and then a preprocessor function that handles aggregation of choices between filling in the matrix
+		and use of minimization (a function that accepts the array and reduces the choices so that we can actually minimize
+		or maximize. We need this to reduce multiple state variables to a single state variable.
 	"""
 
+	def __init__(self, name):
+		self.name = name
 
-	pass
+		self.column_index = None  # this will be set by the calling DP - it indicates what column in the table has this information
 
 
 class DecisionVariable(object):
@@ -50,10 +122,10 @@ class DynamicProgram(object):
 		Currently designed to only handle backward DPs
 	"""
 
-	def __init__(self, calculation_function, timestep_size, time_horizon, discount_rate, state_variables=None, selection_constraints=None, decision_variables=None):
+	def __init__(self, objective_function, timestep_size, time_horizon, discount_rate, state_variables=None, selection_constraints=None, decision_variables=None):
 		"""
 
-		:param calculation_function: What function are we using to evaluate? Basically, is this a maximization (benefit)
+		:param objective_function: What function are we using to evaluate? Basically, is this a maximization (benefit)
 		 or minimization (costs) setup. Provide the function object for max or min. Provide the actual `min` or `max functions
 		 (don't run it, just the name) or if convenient, use the shortcuts dp.MINIMIZE or dp.MAXIMIZE
 
@@ -74,26 +146,38 @@ class DynamicProgram(object):
 		if not state_variables:
 			self.state_variables = []
 		else:
-			self.state_variables = state_variables
+			self.state_variables = list(state_variables)  # coerce to list in case they gave us something immutable like a tuple
+			self._index_state_variables()
 
 		# set up decision variables passed in
 		if not decision_variables:
-			self.decision_variables = []
+			self.decision_variable = None
 		else:
-			self.decision_variables = decision_variables
+			self.decision_variable = decision_variable
 
 		# Calculation Function
-		self.calculation_function = calculation_function
+		self.objective_function = objective_function
 
-		if self.calculation_function not in (max, min, MAXIMIZE, MINIMIZE):
+		if self.objective_function not in (max, min, MAXIMIZE, MINIMIZE):
 			raise ValueError("Calculation function must be either 'max' or 'min' or one of the aliases in this package of dp.MAXIMIZE or dp.MINIMIZE")
 
 		# make values that we use as bounds in our calculations - when maximizing, use a negative number, and when minimizing, get close to infinity
 		# we use this for any routes through the DP that get excluded
-		if self.calculation_function is max:
+		if self.objective_function is max:
 			self.exclusion_value = -1  # just need it to be less
-		elif self.calculation_function is min:
+		elif self.objective_function is min:
 			self.exclusion_value = 9223372036854775808  # max value for a signed 64 bit int - this should force it to not be selected in minimization
+
+	def add_variable(self, variable):
+		if not isinstance(variable, StateVariable):
+			raise ValueError("Provided variable must be a StateVariable object. Can't add variable of type {} to DP".format(type(variable)))
+
+		self.state_variables.append(variable)
+		self._index_state_variables()  # make sure to reindex the variables when we add one
+
+	def _index_state_variables(self):
+		for index, variable in enumerate(self.state_variables):
+			variable.column_index = index  # tell the variable what column it is
 
 	def add_stage(self, name):
 		stage = Stage(name=name)
