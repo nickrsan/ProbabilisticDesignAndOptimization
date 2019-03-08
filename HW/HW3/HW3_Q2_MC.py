@@ -225,7 +225,7 @@ def plot(cost_means, x_size=11, nsamples=None):
 	# label points - via https://stackoverflow.com/a/37115496/587938
 	ymin, ymax = current_plot_ax.get_ylim()
 	y_offset = (ymax - ymin) / 20
-	[current_plot_ax.text(p[0] - 0.15, p[1] - y_offset, p[1], color='b') for p in zip(range(x_size), cost_means)]
+	[current_plot_ax.text(p[0] - 0.15, p[1] - y_offset, p[1], color='b') for p in zip(range(x_size), cost_means)]  # label each point at offset locations near each point
 
 	pyplot.show()
 

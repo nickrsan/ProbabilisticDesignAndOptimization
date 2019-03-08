@@ -135,9 +135,10 @@ class Scenario(object):
 		self.mean_at_stage[stage] = self.mean_at_decade(decade)
 		self.sd_at_stage[stage] = self.sd_at_decade(decade)
 
+	def calculate_scores(self, stage, mean_mean, mean_sd, sd_mean, sd_sd):
 		# 2 calculate the Z scores - I think I'm doing this a bit wrong right now
-		self.mean_z_scores[stage] = z_score(self.mean_at_stage[stage], self.mean_at_stage[stage-1], self.sd_at_stage[stage-1])
-		self.sd_z_scores[stage] = z_score(self.sd_at_stage[stage], self.sd_at_stage[stage-1], self.sd_sd_growth)
+		self.mean_z_scores[stage] = z_score(self.mean_at_stage[stage], mean_mean, mean_sd, sqrt_of_sample_size=1)
+		self.sd_z_scores[stage] = z_score(observation=self.sd_at_stage[stage], mu=sd_mean, sigma=sd_sd, sqrt_of_sample_size=1)
 
 		# 3 figure out the probability based on z score fit within discretized probability distribution
 		self.mean_probabilities[stage] = self.get_probability(self.mean_z_scores[stage])
@@ -163,6 +164,17 @@ def get_scenarios(number_of_stages=constants.NUMBER_TIME_STEPS):
 	scenarios.append(Scenario("F", 0.1, 0.05, 0.10, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
 
 	# Now calculate the sums of the numerators for each bayesian stage so we can make our denominator
+
+	for stage in range(1, number_of_stages+1):
+		means = []
+		sds = []
+		for scenario in scenarios:
+			means.append(scenario.mean_at_stage[stage])
+			sds.append(scenario.sd_at_stage[stage])
+
+		for scenario in scenarios:
+			scenario.calculate_scores(stage, numpy.mean(means), math.sqrt(stats.describe(means)[3]), numpy.mean(sds), math.sqrt(stats.describe(sds)[3]))
+
 	denominators = [0]
 	for stage in range(1, number_of_stages+1):
 		stage_list = []
@@ -177,6 +189,22 @@ def get_scenarios(number_of_stages=constants.NUMBER_TIME_STEPS):
 		for scenario in scenarios:
 			scenario.bayesian_probabilities[stage] = float(scenario.bayesian_numerators[stage]) / denominators[stage]
 			log.info("Scenario {}, stage {}: {}".format(scenario.name, stage, scenario.bayesian_probabilities[stage]))
+
+	log.debug("MEANS")
+	for scenario in scenarios:
+		log.debug(scenario.mean_at_stage)
+
+	log.debug("SDS")
+	for scenario in scenarios:
+		log.debug(scenario.sd_at_stage)
+
+	log.debug("Mean Z-Scores")
+	for scenario in scenarios:
+		log.debug(scenario.mean_z_scores)
+
+	log.debug("SD Z-Scores")
+	for scenario in scenarios:
+		log.debug(scenario.sd_z_scores)
 
 	return scenarios
 

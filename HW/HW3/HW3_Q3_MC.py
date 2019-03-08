@@ -2,6 +2,7 @@ import random
 import math
 import seaborn
 import numpy
+from scipy import stats
 
 import matplotlib.pyplot as plt
 
@@ -22,10 +23,16 @@ def manning(a=A, r=R, s=S, max_n=0.08, min_n=0.06):
 	return (1.49/n)*a*(r**(2/3))*math.sqrt(s)
 
 qs = []
-for _ in range(100000):
+for _ in range(500000):
 	qs.append(manning())
 
+#log_array = numpy.log(numpy.array(qs))
+
+stats = stats.describe(numpy.array(qs))
+print(stats)
+
 seaborn.distplot(numpy.array(qs), bins=10)
+#seaborn.distplot(log_array, bins=10)
 plt.show()
 
 

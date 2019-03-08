@@ -360,8 +360,7 @@ for i in range(n - 1, n):
 			# existing levee height l
 			existh = (EXH[i][l])
 			if (i % T) == 0:
-				NHUPm = int(round((
-									  Hupmax) / DELTAH + 1))  # upgrading time periods, calculate for all possible upgrading heights (UPH[i][m]) = 0
+				NHUPm = int(round((Hupmax) / DELTAH + 1))  # upgrading time periods, calculate for all possible upgrading heights (UPH[i][m]) = 0
 			else:
 				NHUPm = 1  # none upgrading time periods, upgradh = 0, so could only calculate for the first (UPH[i][1]) = 0
 			for m in range(NHUPm):
