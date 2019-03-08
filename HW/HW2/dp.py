@@ -23,8 +23,12 @@
 	flow_var = dp.StateVariable("peak_flow")
 	variance_var = dp.StateVariable("variance")
 	decision_var = dp.DecisionVariable()
+	decision_var.related_state = height_var  # tell the decision variable which state it impacts
 
+	# TODO: Make sure to check how we can make the decision variable properly interact with the state variable - thinking
+			# of making sure that the decision variable adds to the correct state variable items
 	# TODO: Missing plan for how we assign probabilities here - needs to be incorporated somewhere
+	# TODO: Missing choice constraints (eg, min selection at stage ___ is ___)
 
 	dynamic_program = dp.DynamicProgram(objective_function=objective_function,
 										state_variables=(height_var, flow_var, variance_var),
@@ -75,6 +79,7 @@ class ProbabilisticReducer(Reducer):
 	"""
 	pass
 
+
 class StateVariable(object):
 	"""
 		Not sure what I'm going to do with this yet, but I think we'll need it in order to have rows for interactions
@@ -94,25 +99,97 @@ class StateVariable(object):
 		or maximize. We need this to reduce multiple state variables to a single state variable.
 	"""
 
-	def __init__(self, name):
+	def __init__(self, name, values):
 		self.name = name
+		self.values = values
 
 		self.column_index = None  # this will be set by the calling DP - it indicates what column in the table has this information
 
 
 class DecisionVariable(object):
-	def __init__(self, name):
+	def __init__(self, name, related_state=None, minimum=None, maximum=None, step_size=None, options=None):
 		"""
 			We'll use this to manage the decision variable - we'll need columns for each potential value here
 		:param name:
+		:param state: the StateVariable object that this DecisionVariable directly feeds back on
 		"""
 		self.name = name
-		self.min = None
-		self.max = None
-		self.step_size = None
+		self.related_state = related_state
 
+		self._min = minimum
+		self._max = maximum
+		self._step_size = step_size
+		self._options = options
+		if options:
+			self._user_set_options = True  # keep track so we can zero it out later if they set min/max/stepsize params
+		else:
+			self._user_set_options = False
+
+		self.constraints = {}
+
+	# we have all of these simple things as @property methods instead of simple attributes so we can
+	# make sure to have the correct behaviors if users set the options themselves
+	@property
+	def minimum(self):
+		return self._min
+
+	@property
+	def maximum(self):
+		return self._max
+
+	@property
+	def step_size(self):
+		return self._step_size
+
+	@minimum.setter
+	def minimum(self, value):
+		self._min = value
+		self._reset_options()
+
+	@maximum.setter
+	def maximum(self, value):
+		self._max = value
+		self._reset_options()
+
+	@step_size.setter
+	def step_size(self, value):
+		self._step_size = value
+		self._reset_options()
+
+	def _reset_options(self):
+		if not self._user_set_options:
+			self._options = None  # if we change any of the params, clear the options
+
+	@property
 	def options(self):
-		return range(self.min, self.max, self.step_size)
+		if self._options:  # if they gave us options
+			return self._options
+		elif self._min and self._max and self.step_size:
+			if type(self._min) == "int" and type(self._max) == "int" and type(self.step_size) == "int":  # if they're all integers we'll use range
+				self._options = range(self._min, self._max, self.step_size)  # cache it so next time we don't have to calculate
+			else:
+				# the `num` param here just transforms step_size to its equivalent number of steps for linspace. Add 1 to capture accurate spacing with both start and endpoints
+				self._options = numpy.linspace(start=self._min, stop=self._max, num=int((self._max-self._min)/self.step_size)+1, endpoint=True)
+
+			self._user_set_options = False
+			return self._options
+
+		raise ValueError("Can't get DecisionVariable options - need either explicit options (.options) or a minimum value, a maximum value, and a step size")
+
+	@options.setter
+	def options(self, value):
+		self._options = value
+		self._user_set_options = True
+
+	def add_constraint(self, stage, value):
+		"""
+			Want to figure out a way here to store also whether this constraint is a minimum or a maximum value constraint.
+			Need to think how we'd handle that behavior
+		:param stage:
+		:param value:
+		:return:
+		"""
+		pass
 
 
 class DynamicProgram(object):
@@ -168,7 +245,12 @@ class DynamicProgram(object):
 		elif self.objective_function is min:
 			self.exclusion_value = 9223372036854775808  # max value for a signed 64 bit int - this should force it to not be selected in minimization
 
-	def add_variable(self, variable):
+	def add_state_variable(self, variable):
+		"""
+
+		:param variable: A StateVariable object - afterward, will be available in .state_variables
+		:return:
+		"""
 		if not isinstance(variable, StateVariable):
 			raise ValueError("Provided variable must be a StateVariable object. Can't add variable of type {} to DP".format(type(variable)))
 
@@ -177,6 +259,9 @@ class DynamicProgram(object):
 
 	def _index_state_variables(self):
 		for index, variable in enumerate(self.state_variables):
+			if not isinstance(variable, StateVariable):  # this is a bit silly to have this check twice, but this method checks it even if the user passes a list of StateVariables
+				raise ValueError("Provided variable must be a StateVariable object. Can't add variable of type {} to DP".format(type(variable)))
+
 			variable.column_index = index  # tell the variable what column it is
 
 	def add_stage(self, name):
@@ -209,8 +294,8 @@ class DynamicProgram(object):
 
 	def run(self):
 
-		if len(self.decision_variables) == 0 or len(self.state_variables) == 0:
-			raise ValueError("Decision Variables and State Variables must be attached to DynamicProgram before running")
+		if not self.decision_variable or len(self.state_variables) == 0:
+			raise ValueError("Decision Variable and State Variables must be attached to DynamicProgram before running. Use .add_state_variable to attach additional state variables, or set .decision_variable to a DecisionVariable object first")
 
 		# build a matrix where everything is 0  - need to figure out what the size of the x axis is
 		# this matrix should just have a column for each timestep (we'll pull these out later), which will then be used by
