@@ -284,13 +284,14 @@ class DynamicProgram(object):
 			self.stages[i].previous = self.stages[i-1]
 			self.stages[i].number = i
 
-	def build_stages(self):
+	def build_stages(self, name_prefix="Step"):
 		"""
 			Make a stage for every timestep
+		:param name_prefix: The string that will go before the stage number when printing information
 		:return:
 		"""
-		for stage_id in range(self.time_horizon, self.timestep_size):
-			self.add_stage(name="Year {}".format(stage_id))
+		for stage_id in range(0, self.time_horizon+1, self.timestep_size):
+			self.add_stage(name="{} {}".format(name_prefix, stage_id))
 
 	def run(self):
 

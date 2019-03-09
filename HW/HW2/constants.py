@@ -93,3 +93,10 @@ MAINTENANCE_COST_PER_METER = OM/1000
 
 FLAC = 500000
 FIXED_LEVEE_ALTERATION_COST = FLAC  # base cost for any change to levee
+
+## CALCULATED CONSTANTS
+
+# These two are values for the height at the base of the floodplain and the height at the toe of the levee - flows below
+# the toe height never overflow
+FLOODPLAIN_HEIGHT = (LEVEED_CHANNEL_WIDTH_TO_TOE - LEVEED_CHANNEL_WIDTH) * FLOODPLAIN_SLOPE  # Floodplain height
+TOE_HEIGHT = CHANNEL_DEPTH + FLOODPLAIN_HEIGHT  # Water level at the toe of the levee

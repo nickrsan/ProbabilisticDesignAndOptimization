@@ -326,8 +326,6 @@ def maintenance_cost_stage(length=constants.LEVEE_SYSTEM_LENGTH,
 
 	return total_cost
 
-MAINTENANCE_COST = maintenance_cost_stage()  # make it a constant so we can just reference it
-
 
 def _levee_volume_cost(volume,
 					   year=0,
@@ -394,34 +392,79 @@ def levee_construction_cost(height,
 
 
 # Flow corresponding to aNY specific water level (from bottom of the river), calculated by Manning's Equation
-def get_overflow(water_height):
+def get_flow_for_height(water_height):
 	"""
 		This is Rui's function for this exactly, incorporated here and adapted to my variable names
 	:param water_height:
-	:return:
+	:return: flow value for water reaching that height
 	"""
 
-	Hfp = (constants.LEVEED_CHANNEL_WIDTH_TO_TOE - constants.LEVEED_CHANNEL_WIDTH) * constants.FLOODPLAIN_SLOPE  # Floodplain height
-	Htoe = constants.CHANNEL_DEPTH + Hfp  # Water level at the toe of the levee
-
-	if water_height >= Htoe:  # If water level is above the toe and below the top of the levee
-		CrossSection = constants.LEVEED_CHANNEL_WIDTH * constants.CHANNEL_DEPTH + (constants.LEVEED_CHANNEL_WIDTH + constants.LEVEED_CHANNEL_WIDTH_TO_TOE) * Hfp / 2 + (2*constants.LEVEED_CHANNEL_WIDTH_TO_TOE + 2 * (water_height - Htoe) / constants.WATER_SIDE_SLOPE) * (water_height - Htoe) / 2
+	if water_height >= constants.TOE_HEIGHT:  # If water level is above the toe and below the top of the levee
+		cross_section = constants.LEVEED_CHANNEL_WIDTH * constants.CHANNEL_DEPTH + (constants.LEVEED_CHANNEL_WIDTH + constants.LEVEED_CHANNEL_WIDTH_TO_TOE) * constants.FLOODPLAIN_HEIGHT / 2 + (2*constants.LEVEED_CHANNEL_WIDTH_TO_TOE + 2 * (water_height - constants.TOE_HEIGHT) / constants.WATER_SIDE_SLOPE) * (water_height - constants.TOE_HEIGHT) / 2
 		# Cross section area of flow at water_height depth
-		WettedP = constants.LEVEED_CHANNEL_WIDTH + 2 * constants.CHANNEL_DEPTH + 2 * math.sqrt(((constants.LEVEED_CHANNEL_WIDTH_TO_TOE - constants.LEVEED_CHANNEL_WIDTH) / 2) ** 2 + (Hfp) ** 2) + 2 * math.sqrt(
-			((water_height - Htoe) / constants.WATER_SIDE_SLOPE) ** 2 + (water_height - Htoe) ** 2)
+		wetted_perimeter = constants.LEVEED_CHANNEL_WIDTH + 2 * constants.CHANNEL_DEPTH + 2 * math.sqrt(((constants.LEVEED_CHANNEL_WIDTH_TO_TOE - constants.LEVEED_CHANNEL_WIDTH) / 2) ** 2 + (constants.FLOODPLAIN_HEIGHT) ** 2) + 2 * math.sqrt(
+			((water_height - constants.TOE_HEIGHT) / constants.WATER_SIDE_SLOPE) ** 2 + (water_height - constants.TOE_HEIGHT) ** 2)
 		# Wetted perimeter
 	else:
 		if water_height >= constants.CHANNEL_DEPTH:  # If water level is above the channel depth and below the toe of the levee
-			CrossSection = constants.LEVEED_CHANNEL_WIDTH * constants.CHANNEL_DEPTH + (2 * constants.LEVEED_CHANNEL_WIDTH + 2 * (water_height - constants.CHANNEL_DEPTH) / constants.FLOODPLAIN_SLOPE) * (water_height - constants.CHANNEL_DEPTH) / 2
+			cross_section = constants.LEVEED_CHANNEL_WIDTH * constants.CHANNEL_DEPTH + (2 * constants.LEVEED_CHANNEL_WIDTH + 2 * (water_height - constants.CHANNEL_DEPTH) / constants.FLOODPLAIN_SLOPE) * (water_height - constants.CHANNEL_DEPTH) / 2
 			# Cross section area of flow at water_height depth
-			WettedP = constants.LEVEED_CHANNEL_WIDTH + 2 * constants.CHANNEL_DEPTH + 2 * math.sqrt(((water_height - constants.CHANNEL_DEPTH) / constants.FLOODPLAIN_SLOPE) ** 2 + (water_height - constants.CHANNEL_DEPTH) ** 2)
+			wetted_perimeter = constants.LEVEED_CHANNEL_WIDTH + 2 * constants.CHANNEL_DEPTH + 2 * math.sqrt(((water_height - constants.CHANNEL_DEPTH) / constants.FLOODPLAIN_SLOPE) ** 2 + (water_height - constants.CHANNEL_DEPTH) ** 2)
 			# Wetted perimeter
 		else:
-			CrossSection = water_height * constants.LEVEED_CHANNEL_WIDTH  # Cross section area of flow at water_height depth
-			WettedP = 2 * water_height + constants.LEVEED_CHANNEL_WIDTH  # Wetted perimeter
-	Velocity = constants.MANNING_CONVERSION_FACTOR / constants.MANNINGS_N * (CrossSection / WettedP) ** (2 / 3) * math.sqrt(constants.LONGITUDINAL_SLOPE_OF_CHANNEL)  # Water velocity
-	overflow = Velocity * CrossSection  # Flow
+			cross_section = water_height * constants.LEVEED_CHANNEL_WIDTH  # Cross section area of flow at water_height depth
+			wetted_perimeter = 2 * water_height + constants.LEVEED_CHANNEL_WIDTH  # Wetted perimeter
+
+	velocity = constants.MANNING_CONVERSION_FACTOR / constants.MANNINGS_N * (cross_section / wetted_perimeter) ** (2 / 3) * math.sqrt(constants.LONGITUDINAL_SLOPE_OF_CHANNEL)  # Water velocity
+	overflow = velocity * cross_section  # Flow
 	return overflow
+
+
+def get_flow_height_index():
+	flow_heights = {}
+	number_of_steps = int((constants.MAXIMUM_LEVEE_HEIGHT - constants.INITIAL_LEVEE_HEIGHT)/constants.LEVEE_HEIGHT_INCREMENT)+1  # this gives us the number of increments for numpy.linspace
+	for height in numpy.linspace(constants.INITIAL_LEVEE_HEIGHT, constants.MAXIMUM_LEVEE_HEIGHT, num=number_of_steps):
+		input_height = height + constants.TOE_HEIGHT  # add the toe height so that our calculated heights are levee heights
+		flow_at_height = get_flow_for_height(input_height)
+
+		flow_heights[flow_at_height] = height  # this is specifically height and not input_height so we can compare it to levee heights
+
+	return flow_heights
+
+# DEFINE CONSTANTS BASED ON THESE FUNCTIONS
+MAINTENANCE_COST = maintenance_cost_stage()  # make it a constant so we can just reference it
+FLOW_HEIGHT_INDEX = get_flow_height_index()  # gives us the levee height of a specific flow
+FLOW_HEIGHT_INDEX_KEYS = tuple(sorted(FLOW_HEIGHT_INDEX.keys()))
+
+
+def get_required_levee_height(flow, flow_height_index=FLOW_HEIGHT_INDEX, flow_height_index_keys=FLOW_HEIGHT_INDEX_KEYS):
+	"""
+
+	:param flow:
+	:param flow_height_index:
+	:param flow_height_index_keys: We send in the keys as well so that we can sort them ONCE and not every time - it's for performance
+	:return: required levee hight to contain given `flow` - if flow is infeasible, returns constants.MAXIMUM_LEVEE_HEIGHT + 1, so any value greater than MAXIMUM_LEVEE_HEIGHT should be caught
+	"""
+	if flow > flow_height_index_keys[-1]:  # if the flow is greater than the highest option, return max height + 1
+		return constants.MAXIMUM_LEVEE_HEIGHT + 1  # this is infeasible and we'll catch it in anything that calls this
+
+	corresponding_height_index = bisect.bisect_left(flow_height_index_keys, flow)
+	corresponding_flow = flow_height_index_keys[corresponding_height_index]
+	return flow_height_index[corresponding_flow]
+
+
+def levee_is_overtopped(flow, levee_height):
+	"""
+		Tells us if a levee of height levee_height is overtopped by a flow of magnitude flow
+	:param flow:
+	:param levee_height:
+	:return:
+	"""
+
+	if get_required_levee_height(flow) > levee_height:
+		return True
+	else:
+		return False
 
 
 def z_score(observation, mu, sigma, sqrt_of_sample_size=constants.SQRT_INITIAL_SAMPLE_SIZE):
