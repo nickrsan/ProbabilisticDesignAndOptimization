@@ -251,7 +251,9 @@ def total_costs_of_choice(scenarios, initial_height, incremental_height, stage, 
 	:return:
 	"""
 
-	if initial_height + incremental_height > constants.MAXIMUM_LEVEE_HEIGHT:  # if this combination isn't allowed because it makes the levee too tall
+	levee_height = initial_height + incremental_height
+
+	if levee_height > constants.MAXIMUM_LEVEE_HEIGHT:  # if this combination isn't allowed because it makes the levee too tall
 		return constants.EXCLUSION_VALUE  # then return that it's just really expensive to raise it like this - fast if we just exclude it right off the bat
 
 	# run the building and maintenance cost code ONCE, store the value
@@ -259,33 +261,15 @@ def total_costs_of_choice(scenarios, initial_height, incremental_height, stage, 
 	# for each scenario, get the costs of overtopping and failure for the new height multiplied by the bayesian probability
 
 	for scenario in scenarios:
-		# cost of overtopping
-		cost += get_overtopping_costs()  # TODO: Need to adjust this once we have the *probabilistic* flows
+		# TODO: Add flows and probabilities here. cost of overtopping
+		cost += get_failure_costs(levee_height=levee_height, failure_function=vectorized_overtopping)  # TODO: Need to adjust this once we have the *probabilistic* flows
 
-		# cost of geotechnical failure
-
-	# sum the two (construction and failure
+		# TODO: Add flows and probabilities here. cost of geotechnical failure
+		cost += get_failure_costs(levee_height=levee_height, failure_function=levee_fails)
 
 	# annualize it over the entire period
 
 	return cost
-
-
-def levee_overtopping_cost():
-	"""
-		Rui's paper doesn't do much to distinguish between this and geotechnical failure costs.
-		Keeping them as separate functions for now so that we can
-	:return:
-	"""
-	return constants.FLOOD_DAMAGE_COST_FOR_EACH_FAILURE
-
-
-def levee_failure_cost():
-	"""
-		Cost of geotechnical failure
-	:return:
-	"""
-	return constants.FLOOD_DAMAGE_COST_FOR_EACH_FAILURE
 
 
 def levee_raise_cost(current_height, incremental_height,):
@@ -465,6 +449,7 @@ def get_required_levee_height(flow, flow_height_index=FLOW_HEIGHT_INDEX, flow_he
 	corresponding_flow = flow_height_index_keys[corresponding_height_index]
 	return flow_height_index[corresponding_flow]
 
+vectorized_get_required_levee_height = numpy.vectorize(get_required_levee_height)
 
 def levee_is_overtopped(flow, levee_height):
 	"""
@@ -485,20 +470,47 @@ def levee_is_overtopped(flow, levee_height):
 vectorized_overtopping = numpy.vectorize(levee_is_overtopped)
 
 
-def get_overtopping_costs(flows, levee_height, probabilities):
+def levee_fails(flows, levee_height, failure_scaling_factor=constants.FAILURE_SCALING_FACTOR):
+	"""
+		Determines if a levee fails based on a linear probability of failure from 0 at the bottom to 1 at the top, according
+		to Hui et al, 2018. But, that estimate seems high, so we reduce that probability by multiplying it by
+		the failure_scaling_factor, then randomly assessing if the levee fails.
+
+		TODO: We might not want to do it this way because the sample size might not be large enough like a Monte Carlo.
+		TODO: Instead, we might want to just multiply the failure chance times the cost and assume it's deterministic.
+
+		TODO: This function could be made faster if it was combined with the overtopping function and they returned one set of damages
+	:param flows:
+	:param levee_height:
+	:param failure_scaling_factor:
+	:return:
+	"""
+
+	water_heights = vectorized_get_required_levee_height(flows)
+	failure_chance = (water_heights / levee_height) * failure_scaling_factor
+	failure_values = numpy.random.random_sample(flows.size)
+	failure_values[water_heights > levee_height] = 1  # basically, this allows us to pass in all flows, and it automatically excludes any flows that overtop the levee because we calculate those damages elsewhere - we could do it here instead and increase the speed a bit, with some refactoring
+
+	return failure_values < failure_chance  # returns True for failure values smaller than the failure chance and False for ones larger
+
+
+def get_failure_costs(flows, levee_height, probabilities, failure_function=vectorized_overtopping):
 	"""
 
 	:param flows: a numpy array of all of the flows from the discretized distribution
-	:param levee_height: the
+	:param levee_height: the height of the levee these flows are running near
 	:param probabilities: a numpy array of the probabilities of that flow
+	:param failure_function: a function, ideally numpy vectorized, that returns a boolean array indicating True if a failure
+			occurs with said flow, and False if no failure occurs
 	:return: total cost across all probabilistic values of overtopping
 	"""
 
-	overtopped = vectorized_overtopping(flows, levee_height)
+	overtopped = failure_function(flows, levee_height)  # gets if a levee of this height is overtopped by this flow
 	costs = numpy.zeros_like(flows)  # make a cost array with 0 for each flow
 	numpy.putmask(costs, mask=overtopped, values=constants.FLOOD_DAMAGE_COST_FOR_EACH_FAILURE)
 
 	return numpy.sum(costs * probabilities)  # the summed cost of each times its probability is our overtopping cost
+
 
 def z_score(observation, mu, sigma, sqrt_of_sample_size=constants.SQRT_INITIAL_SAMPLE_SIZE):
 	"""

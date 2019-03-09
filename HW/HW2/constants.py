@@ -7,8 +7,14 @@
 """
 import math
 import logging
+import random
+import numpy
 
 log = logging.getLogger("levee.constants")
+
+# set random seeds
+random.seed(20190309)
+numpy.random.seed(20190309)
 
 EXCLUSION_VALUE = 9223372036854775808  # max value for a signed 64 bit int - this should force it to not be selected in minimization
 
@@ -68,6 +74,7 @@ SIGMA_OF_SIGMA = 10  # given from Jay - assumption we'll make - growth of the st
 
 DC = 10000000  # dollars
 FLOOD_DAMAGE_COST_FOR_EACH_FAILURE = DC
+FAILURE_SCALING_FACTOR = 0.05  # Rui has failurs occur linearly from 0 at the bottom to 1 at the top. This seems very high - 1/4 of levees that are 1/4 way up don't fail. This value scales those chances down
 
 UC = 1  # $/m^2
 LAND_PRICE = UC
