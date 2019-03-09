@@ -2,7 +2,10 @@ import unittest
 import numpy
 
 from HW.HW2 import support
+from HW.HW2 import constants
 
+import logging
+log = logging.getLogger("levee.tests.support")
 
 class FlowHeightTest(unittest.TestCase):
 	def test_levee_height_lookup(self):
@@ -40,4 +43,29 @@ class FlowHeightTest(unittest.TestCase):
 
 		print("Total Cost: {}".format(total_cost))
 		self.assertAlmostEqual(total_cost, 7500000.0)
+
+
+class ScenarioTest(unittest.TestCase):
+	def setUp(self):
+		self.scenarios = support.get_scenarios(number_of_stages=constants.NUMBER_TIME_STEPS)
+
+	def test_probabilities_equal_one(self):
+		"""
+			checks that after we run the bayesian probabilities, they total 1 for each stage.
+			If they don't, then we have a big problem since that means we're going to scale
+			things past the actual value. Failing as of 3/9/2019, meaning we need to rework
+			our Bayesian Updating code...
+		:return:
+		"""
+		probabilities = []
+		for scenario in self.scenarios:
+			probabilities.append(scenario.bayesian_probabilities)
+
+		for stage in range(constants.NUMBER_TIME_STEPS):
+			stage_probabilities = numpy.array(probabilities[:][stage])
+			log.debug("Stage {} probabilities: {}".format(stage, stage_probabilities))
+			self.assertAlmostEqual(1, stage_probabilities.sum())
+
+
+
 

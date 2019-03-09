@@ -258,6 +258,7 @@ def total_costs_of_choice(scenarios, initial_height, incremental_height, stage, 
 	cost = building_and_maintenance_costs(initial_height=initial_height, incremental_height=incremental_height)
 	# for each scenario, get the costs of overtopping and failure for the new height multiplied by the bayesian probability
 
+	for scenario in scenarios:
 		# cost of overtopping
 		cost += get_overtopping_costs()  # TODO: Need to adjust this once we have the *probabilistic* flows
 
@@ -268,6 +269,7 @@ def total_costs_of_choice(scenarios, initial_height, incremental_height, stage, 
 	# annualize it over the entire period
 
 	return cost
+
 
 def levee_overtopping_cost():
 	"""
