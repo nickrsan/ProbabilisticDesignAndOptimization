@@ -1,4 +1,5 @@
 import unittest
+import numpy
 
 from HW.HW2 import support
 
@@ -32,4 +33,11 @@ class FlowHeightTest(unittest.TestCase):
 		self.assertTrue(9999, 0.1)
 		self.assertTrue(9999, 15)
 
+	def test_vectorized_overtopping(self):
+		probabilities = numpy.array([0.25, 0.74, 0.01])
+		flows = numpy.array([1, 50, 99])
+		total_cost = support.get_overtopping_costs(flows, 0, probabilities)
+
+		print("Total Cost: {}".format(total_cost))
+		self.assertAlmostEqual(total_cost, 7500000.0)
 

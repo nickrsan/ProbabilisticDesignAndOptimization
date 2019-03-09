@@ -242,6 +242,7 @@ def building_and_maintenance_costs(initial_height, incremental_height, construct
 
 def total_costs_of_choice(scenarios, initial_height, incremental_height, stage, observered_mean_flow, observed_flood_peak_variance):
 	"""
+		This will be our objective function for our DP
 
 	:param scenarios:
 	:param initial_height:
@@ -258,6 +259,7 @@ def total_costs_of_choice(scenarios, initial_height, incremental_height, stage, 
 	# for each scenario, get the costs of overtopping and failure for the new height multiplied by the bayesian probability
 
 		# cost of overtopping
+		cost += get_overtopping_costs()  # TODO: Need to adjust this once we have the *probabilistic* flows
 
 		# cost of geotechnical failure
 
@@ -265,6 +267,7 @@ def total_costs_of_choice(scenarios, initial_height, incremental_height, stage, 
 
 	# annualize it over the entire period
 
+	return cost
 
 def levee_overtopping_cost():
 	"""
@@ -331,6 +334,14 @@ def _levee_volume_cost(volume,
 					   year=0,
 						material_cost=constants.COST_OF_SOIL,
 						discount_rate=constants.DISCOUNT_RATE):
+	"""
+		TODO: We might not want to present value this because we'll do the present value adjustment once later
+	:param volume:
+	:param year:
+	:param material_cost:
+	:param discount_rate:
+	:return:
+	"""
 
 	return volume * present_value(material_cost, year=year, discount_rate=discount_rate)
 
@@ -455,7 +466,9 @@ def get_required_levee_height(flow, flow_height_index=FLOW_HEIGHT_INDEX, flow_he
 
 def levee_is_overtopped(flow, levee_height):
 	"""
-		Tells us if a levee of height levee_height is overtopped by a flow of magnitude flow
+		Tells us if a levee of height levee_height is overtopped by a flow of magnitude flow.
+
+		We might not use this, instead opting for a faster numpy approach
 	:param flow:
 	:param levee_height:
 	:return:
@@ -466,6 +479,24 @@ def levee_is_overtopped(flow, levee_height):
 	else:
 		return False
 
+
+vectorized_overtopping = numpy.vectorize(levee_is_overtopped)
+
+
+def get_overtopping_costs(flows, levee_height, probabilities):
+	"""
+
+	:param flows: a numpy array of all of the flows from the discretized distribution
+	:param levee_height: the
+	:param probabilities: a numpy array of the probabilities of that flow
+	:return: total cost across all probabilistic values of overtopping
+	"""
+
+	overtopped = vectorized_overtopping(flows, levee_height)
+	costs = numpy.zeros_like(flows)  # make a cost array with 0 for each flow
+	numpy.putmask(costs, mask=overtopped, values=constants.FLOOD_DAMAGE_COST_FOR_EACH_FAILURE)
+
+	return numpy.sum(costs * probabilities)  # the summed cost of each times its probability is our overtopping cost
 
 def z_score(observation, mu, sigma, sqrt_of_sample_size=constants.SQRT_INITIAL_SAMPLE_SIZE):
 	"""
