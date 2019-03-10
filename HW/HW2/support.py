@@ -260,6 +260,23 @@ def total_costs_of_choice(scenarios, initial_height, incremental_height, stage, 
 	cost = building_and_maintenance_costs(initial_height=initial_height, incremental_height=incremental_height)
 	# for each scenario, get the costs of overtopping and failure for the new height multiplied by the bayesian probability
 
+	###
+	#  So, somewhere we want to calculate the expected value - To get the expected value of the flows, maybe something
+	#  like the following:
+	#                      stats.lognorm(*lognormal_transform(100,66)).expect()
+	#
+	#	Except, we can't just do the expected flow value. It should be probability of flows times a set of costs,
+	#	so maybe we can't just use the expected value, but actually do need to discretize. Can we do this in a
+	# 	speedy way? Maybe we build a table of levee heights x flows, where the values are calculated damages.
+	#	Then, for speed, instead of calculating damages for every set of flows, we just look up the damages in
+	#	the table by using bisect again. Since we'll probably see each levee height/flow combination many times.
+	#	If we just look up each flow/levee height combination and multiply by the probabilities, that will help.
+	#	We might even be able to just take a slice of flows for a levee height, and build a probability vector
+	#	using a vectorized function where we get the z score of all of the values in the slice? Then we can just
+	# 	multiply the values in the slice * the probabilities and sum. This could be a speedy approach.
+	#
+	###
+
 	for scenario in scenarios:
 		# TODO: Add flows and probabilities here. cost of overtopping
 		cost += get_failure_costs(levee_height=levee_height, failure_function=vectorized_overtopping)  # TODO: Need to adjust this once we have the *probabilistic* flows
@@ -285,10 +302,9 @@ def levee_raise_cost(current_height, incremental_height,):
 													slope=constants.LAND_SIDE_SLOPE,
 													crown_width=constants.LEVEE_CROWN_WIDTH,
 													number_of_sides=2,)
-	cost = _levee_volume_cost(changes['volume_change'])
+	cost = _levee_volume_cost(changes['volume_change'])  # get the cost of the change in volume
 	cost += constants.FIXED_LEVEE_ALTERATION_COST  # add the cost of any construction project
 	cost += changes['area_change'] * constants.LAND_PRICE  # add the cost of additional land that this levee sits on
-
 
 
 def maintenance_cost_stage(length=constants.LEVEE_SYSTEM_LENGTH,
