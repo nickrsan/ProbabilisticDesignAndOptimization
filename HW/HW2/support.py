@@ -22,21 +22,25 @@ log = logging.getLogger("levee.support")
 
 class Scenario(object):
 	def __init__(self, name,
+				 id,
 				 initial_probability,
 				 mean_peak_growth,
 				 sd_peak_growth,
 				 sd_sd_growth=constants.SIGMA_OF_SIGMA,
 				 initial_mean=constants.INITIAL_MEAN_OF_ANNUAL_FLOOD_FLOW,
 				 initial_sd=constants.INITIAL_SD_OF_ANNUAL_FLOOD_FLOW,
+				 number_of_scenarios=6,
 				 number_of_stages=constants.NUMBER_TIME_STEPS):
 
 		self.name = name
+		self.id = id
 		self.log = logging.getLogger("levee.support.scenario_{}".format(name))
 		self.initial_probability = initial_probability
 		self.mean_peak_growth = mean_peak_growth  # mean peak flood growth by decade
 		self.sd_peak_growth = sd_peak_growth  # standard deviation of peak flood growth by decade
 		self.sd_sd_growth = sd_sd_growth  # growth of the standard deviation itself
 		self.number_of_stages = number_of_stages+1  # add 1 because stage 0 doesn't count here
+		self.number_of_scenarios = number_of_scenarios
 
 		# these are the annual flow paremeters in the initial period, but *NOT* the
 		# parameters for the PEAK flows. We use these to construct a lognormal
@@ -50,12 +54,13 @@ class Scenario(object):
 		# following variables are all keyed by stage number
 		self.mean_at_stage = [initial_mean,] * self.number_of_stages
 		self.sd_at_stage = [initial_sd,] * self.number_of_stages
-		self.mean_z_scores = [0,] * self.number_of_stages
-		self.sd_z_scores = [0,] * self.number_of_stages
-		self.mean_probabilities = [0,] * self.number_of_stages
-		self.sd_probabilities = [0,] * self.number_of_stages
-		self.bayesian_numerators = [0,] * self.number_of_stages
-		self.bayesian_probabilities = [self.initial_probability, ] * self.number_of_stages
+		self.mean_z_scores = numpy.zeros((self.number_of_stages, self.number_of_scenarios))
+		self.sd_z_scores = numpy.zeros((self.number_of_stages, self.number_of_scenarios))
+		self.mean_probabilities = numpy.zeros((self.number_of_stages, self.number_of_scenarios))
+		self.sd_probabilities = numpy.zeros((self.number_of_stages, self.number_of_scenarios))
+		self.bayesian_numerators_no_prior = numpy.zeros((self.number_of_stages, self.number_of_scenarios))
+		self.bayesian_numerators = numpy.zeros((self.number_of_stages, self.number_of_scenarios))
+		self.bayesian_probabilities = numpy.zeros((self.number_of_stages, self.number_of_scenarios))
 		#
 
 		self.probability_distribution_discretization = numpy.linspace(start=constants.PROBABILITY_DISTRIBUTION_LIMITS[0],
@@ -81,9 +86,9 @@ class Scenario(object):
 
 	def get_probability(self, prob_z_score):
 
-		# make sure it's in range - if it's greater than the max, use the max. If it's less than the min, use the min
-		prob_z_score = min(prob_z_score, constants.PROBABILITY_DISTRIBUTION_LIMITS[1])
-		prob_z_score = max(prob_z_score, constants.PROBABILITY_DISTRIBUTION_LIMITS[0])
+		# if it's outside the range of our discretization, then call it 0
+		if prob_z_score > constants.PROBABILITY_DISTRIBUTION_LIMITS[1] or prob_z_score < constants.PROBABILITY_DISTRIBUTION_LIMITS[0]:
+			return 0
 
 		# we subset the discretization because the last item doesn't actually have a key - it's rolled into the previous one
 		probability_index = bisect.bisect_right(self.probability_distribution_discretization[:-1], prob_z_score) - 1 # get the location of the min z_score involved
@@ -135,17 +140,19 @@ class Scenario(object):
 		self.mean_at_stage[stage] = self.mean_at_decade(decade)
 		self.sd_at_stage[stage] = self.sd_at_decade(decade)
 
-	def calculate_scores(self, stage, mean_mean, mean_sd, sd_mean, sd_sd):
+	def calculate_scores(self, stage, sd_sd, other_scenarios):
 		# 2 calculate the Z scores - I think I'm doing this a bit wrong right now
-		self.mean_z_scores[stage] = z_score(self.mean_at_stage[stage], mean_mean, mean_sd, sqrt_of_sample_size=1)
-		self.sd_z_scores[stage] = z_score(observation=self.sd_at_stage[stage], mu=sd_mean, sigma=sd_sd, sqrt_of_sample_size=1)
 
-		# 3 figure out the probability based on z score fit within discretized probability distribution
-		self.mean_probabilities[stage] = self.get_probability(self.mean_z_scores[stage])
-		self.sd_probabilities[stage] = self.get_probability(self.sd_z_scores[stage])
+		for scenario in other_scenarios:
+			self.mean_z_scores[stage][scenario.id] = z_score(observation=self.mean_at_stage[stage], mu=scenario.mean_at_stage[stage], sigma=scenario.sd_at_stage[stage], sqrt_of_sample_size=25)
+			self.sd_z_scores[stage][scenario.id] = z_score(observation=self.sd_at_stage[stage], mu=scenario.sd_at_stage[stage], sigma=sd_sd, sqrt_of_sample_size=25)
 
-		self.bayesian_numerators[stage] = self.initial_probability * self.mean_probabilities[stage] * self.sd_probabilities[stage]
-		self.log.info("Bayesian numerator at Stage {}: {}".format(self.name, stage, self.bayesian_numerators[stage]))
+			# 3 figure out the probability based on z score fit within discretized probability distribution
+			self.mean_probabilities[stage][scenario.id] = self.get_probability(self.mean_z_scores[stage][scenario.id])
+			self.sd_probabilities[stage][scenario.id] = self.get_probability(self.sd_z_scores[stage][scenario.id])
+			self.bayesian_numerators_no_prior[stage][scenario.id] = self.mean_probabilities[stage][scenario.id] * self.sd_probabilities[stage][scenario.id]
+			self.bayesian_numerators[stage][scenario.id] = self.initial_probability * self.bayesian_numerators_no_prior[stage][scenario.id]
+			self.log.info("Bayesian numerator at Stage {}: {}".format(self.name, stage, self.bayesian_numerators[stage]))
 
 		# 4 Fit this probability into bayes' theorem - our new observed values will be
 		# see kathy's jnotes - we'll want to come up with a way to store the probability
@@ -156,39 +163,25 @@ class Scenario(object):
 def get_scenarios(number_of_stages=constants.NUMBER_TIME_STEPS):
 
 	scenarios = []
-	scenarios.append(Scenario("A", 0.2, 0, 0, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
-	scenarios.append(Scenario("B", 0.2, 0, 0.05, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
-	scenarios.append(Scenario("C", 0.2, 0, 0.10, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
-	scenarios.append(Scenario("D", 0.2, 0.05, 0, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
-	scenarios.append(Scenario("E", 0.1, 0.05, 0.05, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
-	scenarios.append(Scenario("F", 0.1, 0.05, 0.10, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
+	scenarios.append(Scenario("A", 0, 0.2, 0, 0, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
+	scenarios.append(Scenario("B", 1, 0.2, 0, 0.05, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
+	scenarios.append(Scenario("C", 2, 0.2, 0, 0.10, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
+	scenarios.append(Scenario("D", 3, 0.2, 0.05, 0, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
+	scenarios.append(Scenario("E", 4, 0.1, 0.05, 0.05, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
+	scenarios.append(Scenario("F", 5, 0.1, 0.05, 0.10, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
 
 	# Now calculate the sums of the numerators for each bayesian stage so we can make our denominator
 
 	for stage in range(1, number_of_stages+1):
-		means = []
-		sds = []
 		for scenario in scenarios:
-			means.append(scenario.mean_at_stage[stage])
-			sds.append(scenario.sd_at_stage[stage])
-
-		for scenario in scenarios:
-			scenario.calculate_scores(stage, numpy.mean(means), math.sqrt(stats.describe(means)[3]), numpy.mean(sds), math.sqrt(stats.describe(sds)[3]))
-
-	denominators = [0]
-	for stage in range(1, number_of_stages+1):
-		stage_list = []
-		for scenario in scenarios:
-			stage_list.append(scenario.bayesian_numerators[stage])
-		log.debug("Stage list: {}".format(stage_list))
-		denominators.append(sum(stage_list))
-		log.info("Denominator at stage {} is {}".format(stage, denominators[-1]))
+			scenario.calculate_scores(stage, 10, scenarios)
 
 	for stage in range(1, number_of_stages+1):
 		log.debug("Getting Bayesian probabilities for stage {}".format(stage))
 		for scenario in scenarios:
-			scenario.bayesian_probabilities[stage] = float(scenario.bayesian_numerators[stage]) / denominators[stage]
-			log.info("Scenario {}, stage {}: {}".format(scenario.name, stage, scenario.bayesian_probabilities[stage]))
+			for other_scenario in scenarios:
+				scenario.bayesian_probabilities[stage][other_scenario.id] = float(scenario.bayesian_numerators[stage][other_scenario.id]) / scenario.bayesian_numerators_no_prior[stage].sum()
+			log.info("Scenario {}, stage {}: {}".format(scenario.name, stage, str(scenario.bayesian_probabilities[stage])))
 
 	log.debug("MEANS")
 	for scenario in scenarios:
@@ -274,6 +267,10 @@ def total_costs_of_choice(scenarios, initial_height, incremental_height, stage, 
 	#	We might even be able to just take a slice of flows for a levee height, and build a probability vector
 	#	using a vectorized function where we get the z score of all of the values in the slice? Then we can just
 	# 	multiply the values in the slice * the probabilities and sum. This could be a speedy approach.
+	#
+	#	Also, should see if there's some way to get the sum(f(value_i)*P(value_i)) where i indicates the ith value
+	#	taken from a probability distribution.
+	#
 	#
 	###
 
@@ -467,6 +464,7 @@ def get_required_levee_height(flow, flow_height_index=FLOW_HEIGHT_INDEX, flow_he
 
 vectorized_get_required_levee_height = numpy.vectorize(get_required_levee_height)
 
+
 def levee_is_overtopped(flow, levee_height):
 	"""
 		Tells us if a levee of height levee_height is overtopped by a flow of magnitude flow.
@@ -488,7 +486,7 @@ vectorized_overtopping = numpy.vectorize(levee_is_overtopped)
 
 def levee_fails(flows, levee_height, failure_scaling_factor=constants.FAILURE_SCALING_FACTOR):
 	"""
-		Determines if a levee fails based on a linear probability of failure from 0 at the bottom to 1 at the top, according
+		Determines if a levee fails (geotechnical) based on a linear probability of failure from 0 at the bottom to 1 at the top, according
 		to Hui et al, 2018. But, that estimate seems high, so we reduce that probability by multiplying it by
 		the failure_scaling_factor, then randomly assessing if the levee fails.
 
@@ -536,4 +534,4 @@ def z_score(observation, mu, sigma, sqrt_of_sample_size=constants.SQRT_INITIAL_S
 	:param sigma:
 	:return:
 	"""
-	return float(observation - mu)/float(sigma/sqrt_of_sample_size)
+	return float(observation - mu)/(float(sigma)/float(sqrt_of_sample_size))
