@@ -20,6 +20,95 @@ if len(root_log.handlers) == 0:  # if we haven't already set up logging, set it 
 
 log = logging.getLogger("levee.support")
 
+
+class FlowDistribution(object):
+	def __init__(self, mean, sd, distribution_type=stats.norm, transform=None):
+		self.mean = mean
+		self.sd = sd
+
+		if transform:
+			self.mean, self.sd = transform(mean, sd)
+
+		self.dist = distribution_type(loc=mean, scale=sd)
+		self._flows = None
+		self._probabilities = None
+
+	def flows(self, spread, number):
+		"""
+		:param spread: how many standard deviations should we get flow out from
+		:param number: how many flows to get
+		:return:
+		"""
+
+		min_spread = self.mean - (self.sd * spread)
+		max_spread = self.mean + (self.sd * spread)
+
+		self._scaling_factor = (max_spread - min_spread) / float(number)  # save this so we can scale probabilities from PDF to 1 - TODO: Double check that this is the right way to do it
+
+		self._flows = numpy.linspace(min_spread, max_spread, num=number, endpoint=True, )
+		self._flows[self._flows < 0] = 0  # zero out the negative values
+		self._probabilities = None
+		return self._flows
+
+	def probabilities(self):
+		if self._flows is None:
+			raise ValueError("Must have called .flows before calling .probabilities on FlowDistribution")
+
+		if self._probabilities is not None:
+			return self._probabilities
+		else:
+			self._probabilities = self.dist.pdf(self._flows) * self._scaling_factor
+			return self._probabilities
+
+
+class LogNormalFlowDistribution(object):
+	def __init__(self, mean, sd, distribution_type=stats.lognorm):
+		self.mean = mean
+		self.sd = sd
+
+		self.dist = distribution_type
+		self._flows = None
+		self._probabilities = None
+
+	def flows(self, spread, number):
+		"""
+		:param spread: how many standard deviations should we get flow out from
+		:param number: how many flows to get
+		:return:
+		"""
+
+		min_spread = self.mean - (self.sd * spread)
+		max_spread = self.mean + (self.sd * spread)
+
+		self._scaling_factor = (max_spread - min_spread) / float(number)  # save this so we can scale probabilities from PDF to 1 - TODO: Double check that this is the right way to do it
+
+		self._flows = numpy.linspace(min_spread, max_spread, num=number, endpoint=True, )
+		self._flows[self._flows < 0] = 0  # zero out the negative values
+		self._probabilities = None
+		return self._flows
+
+	def probabilities(self):
+		if self._flows is None:
+			raise ValueError("Must have called .flows before calling .probabilities on FlowDistribution")
+
+		if self._probabilities is not None:
+			return self._probabilities
+		else:
+			self._probabilities = self.dist.pdf(self._flows, self.sd, loc=self.mean, scale=math.exp(self.mean)) * self._scaling_factor
+			return self._probabilities
+
+
+def z_score(observation, mu, sigma, sqrt_of_sample_size=constants.SQRT_INITIAL_SAMPLE_SIZE):
+	"""
+		Just a simple equation to calculate z-scores
+	:param observation:
+	:param mu:
+	:param sigma:
+	:return:
+	"""
+	return float(observation - mu)/(float(sigma)/float(sqrt_of_sample_size))
+
+
 class Scenario(object):
 	def __init__(self, name,
 				 id,
@@ -52,8 +141,11 @@ class Scenario(object):
 		self.initial_probability = initial_probability
 
 		# following variables are all keyed by stage number
+		self.fake_probability_at_stage = list()  # we'll assign these fake ones manually for testing
 		self.mean_at_stage = [initial_mean,] * self.number_of_stages
 		self.sd_at_stage = [initial_sd,] * self.number_of_stages
+		self.flow_object_at_stage = [None, ] * self.number_of_stages
+		self.flow_object_at_stage[0] = FlowDistribution(initial_mean, initial_sd)
 		self.mean_z_scores = numpy.zeros((self.number_of_stages, self.number_of_scenarios))
 		self.sd_z_scores = numpy.zeros((self.number_of_stages, self.number_of_scenarios))
 		self.mean_probabilities = numpy.zeros((self.number_of_stages, self.number_of_scenarios))
@@ -139,20 +231,21 @@ class Scenario(object):
 		# 1 calculate the current stage mean and standard deviation based on the growth
 		self.mean_at_stage[stage] = self.mean_at_decade(decade)
 		self.sd_at_stage[stage] = self.sd_at_decade(decade)
+		self.flow_object_at_stage[stage] = FlowDistribution(self.mean_at_stage[stage], self.sd_at_stage[stage])
 
 	def calculate_scores(self, stage, sd_sd, other_scenarios):
 		# 2 calculate the Z scores - I think I'm doing this a bit wrong right now
 
 		for scenario in other_scenarios:
-			self.mean_z_scores[stage][scenario.id] = z_score(observation=self.mean_at_stage[stage], mu=scenario.mean_at_stage[stage], sigma=scenario.sd_at_stage[stage], sqrt_of_sample_size=25)
-			self.sd_z_scores[stage][scenario.id] = z_score(observation=self.sd_at_stage[stage], mu=scenario.sd_at_stage[stage], sigma=sd_sd, sqrt_of_sample_size=25)
+			self.mean_z_scores[stage][scenario.id] = z_score(observation=self.mean_at_stage[stage], mu=scenario.mean_at_stage[stage], sigma=scenario.sd_at_stage[stage])
+			self.sd_z_scores[stage][scenario.id] = z_score(observation=self.sd_at_stage[stage], mu=scenario.sd_at_stage[stage], sigma=sd_sd)
 
 			# 3 figure out the probability based on z score fit within discretized probability distribution
 			self.mean_probabilities[stage][scenario.id] = self.get_probability(self.mean_z_scores[stage][scenario.id])
 			self.sd_probabilities[stage][scenario.id] = self.get_probability(self.sd_z_scores[stage][scenario.id])
-			self.bayesian_numerators_no_prior[stage][scenario.id] = self.mean_probabilities[stage][scenario.id] * self.sd_probabilities[stage][scenario.id]
+			self.bayesian_numerators_no_prior[stage][scenario.id] = self.mean_probabilities[stage-1][scenario.id] * self.sd_probabilities[stage-1][scenario.id]
 			self.bayesian_numerators[stage][scenario.id] = self.initial_probability * self.bayesian_numerators_no_prior[stage][scenario.id]
-			self.log.info("Bayesian numerator at Stage {}: {}".format(self.name, stage, self.bayesian_numerators[stage]))
+			self.log.info("Bayesian numerator at Stage {}: {}".format(stage, self.bayesian_numerators[stage]))
 
 		# 4 Fit this probability into bayes' theorem - our new observed values will be
 		# see kathy's jnotes - we'll want to come up with a way to store the probability
@@ -162,7 +255,7 @@ class Scenario(object):
 
 def get_scenarios(number_of_stages=constants.NUMBER_TIME_STEPS):
 
-	scenarios = []
+	scenarios = list()
 	scenarios.append(Scenario("A", 0, 0.2, 0, 0, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
 	scenarios.append(Scenario("B", 1, 0.2, 0, 0.05, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
 	scenarios.append(Scenario("C", 2, 0.2, 0, 0.10, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
@@ -170,6 +263,21 @@ def get_scenarios(number_of_stages=constants.NUMBER_TIME_STEPS):
 	scenarios.append(Scenario("E", 4, 0.1, 0.05, 0.05, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
 	scenarios.append(Scenario("F", 5, 0.1, 0.05, 0.10, sd_sd_growth=constants.SIGMA_OF_SIGMA, number_of_stages=number_of_stages))
 
+	# Assign fake probabilities I made up by stage for testing
+	#scenarios[0].fake_probability_at_stage = [0.2, 0.18, 0.16, 0.12, 0.08, 0.06]
+	#scenarios[1].fake_probability_at_stage = [0.2, 0.19, 0.16, 0.14, 0.135, 0.11]
+	#scenarios[2].fake_probability_at_stage = [0.2, 0.25, 0.3, 0.35, 0.4, 0.45]
+	#scenarios[3].fake_probability_at_stage = [0.2, 0.17, 0.15, 0.13, 0.12, 0.11]
+	#scenarios[4].fake_probability_at_stage = [0.1, 0.12, 0.15, 0.2, 0.225, 0.25]
+	#scenarios[5].fake_probability_at_stage = [0.1, 0.09, 0.08, 0.06, 0.04, 0.02]
+
+	# These are the bayesian sums from Ann
+	scenarios[0].fake_probability_at_stage = [1, 1.023, 1.028, 0.9981, 0.9951, 1.023]
+	scenarios[1].fake_probability_at_stage = [1, 0.9886, 0.9215, 0.8638, 0.8543, 0.8593]
+	scenarios[2].fake_probability_at_stage = [1, 0.9391, 0.7943, 0.7114, 0.6751, 0.6547]
+	scenarios[3].fake_probability_at_stage = [1, 0.9941, 1.039, 1.093, 1.124, 1.146]
+	scenarios[4].fake_probability_at_stage = [1, 1.020, 1.095, 1.161, 1.187, 1.193]
+	scenarios[5].fake_probability_at_stage = [1, 1.036, 1.123, 1.172, 1.164, 1.126]
 	# Now calculate the sums of the numerators for each bayesian stage so we can make our denominator
 
 	for stage in range(1, number_of_stages+1):
@@ -201,6 +309,20 @@ def get_scenarios(number_of_stages=constants.NUMBER_TIME_STEPS):
 
 	return scenarios
 
+scenarios = get_scenarios()
+scenarios_index = {}  # let us look up scenarios by name
+for scenario in scenarios:
+	scenarios_index[scenario.name] = scenario
+
+def objective_function(height, build_increment, stage, *args, **kwargs):
+	"""
+		Version of objective function that collapses all variables into a single one
+	:param height:
+	:param build_increment:
+	:return:
+	"""
+
+	return total_costs_of_choice(scenarios, initial_height=height, incremental_height=build_increment, stage=stage)
 
 def present_value(value, year, discount_rate, compounding_rate=1):
 	"""
@@ -228,12 +350,41 @@ def building_and_maintenance_costs(initial_height, incremental_height, construct
 		build_cost = levee_construction_cost(incremental_height, build_year=0) * construction_cost_multiplier
 	else:
 		# assuming alterations don't have the cost multiplier because they have a fixed cost
-		build_cost = levee_raise_cost(initial_height, incremental_height)
+		build_cost = levee_raise_cost(initial_height, incremental_height) * construction_cost_multiplier
 
 	return build_cost + MAINTENANCE_COST
 
 
-def total_costs_of_choice(scenarios, initial_height, incremental_height, stage, observered_mean_flow, observed_flood_peak_variance):
+def total_costs_of_choice_multivariable(initial_height, incremental_height, scenario_name, stage):
+	levee_height = initial_height + incremental_height
+
+	if levee_height > constants.MAXIMUM_LEVEE_HEIGHT:  # if this combination isn't allowed because it makes the levee too tall
+		return constants.EXCLUSION_VALUE  # then return that it's just really expensive to raise it like this - fast if we just exclude it right off the bat
+
+	# run the building and maintenance cost code ONCE, store the value
+	cost = building_and_maintenance_costs(initial_height=initial_height, incremental_height=incremental_height)
+	# for each scenario, get the costs of overtopping and failure for the new height multiplied by the bayesian probability
+
+	scenario = scenarios_index[scenario_name]
+	flood_cost = 0
+	flow_object = scenario.flow_object_at_stage[stage.number]
+	flows = flow_object.flows(spread=constants.PROBABILITY_DISTRIBUTION_LIMITS[1],
+							  number=constants.PROBABILITY_DISTRIBUTION_DISCRETIZATION_UNITS)
+	probabilities = flow_object.probabilities()
+
+	# cost of overtopping multiplied by scenario probability at stage
+	overtopping_costs = get_failure_costs(flows=flows, probabilities=probabilities, levee_height=levee_height,
+										  failure_function=vectorized_overtopping) # * scenario.fake_probability_at_stage[stage.number]  # TODO: Need to adjust this once we have the *probabilistic* flows
+	flood_cost = flood_cost + overtopping_costs
+
+	# cost of geotechnical failure multiplied by scenario probability at stage
+	flood_cost = flood_cost + get_failure_costs(flows=flows, probabilities=probabilities, levee_height=levee_height,
+												failure_function=levee_fails) # * scenario.fake_probability_at_stage[stage.number]  # sum the bayesian probability because we're not going to do the full transition calc - just get the probability that we're in this scenario at this stage
+
+	return cost + (flood_cost * constants.PERIOD_DISCOUNT_FACTOR)  # multiply the flood cost by the factor that makes it happen on an annual basis, but discounted
+
+
+def total_costs_of_choice(scenarios, initial_height, incremental_height, stage):  #, observered_mean_flow, observed_flood_peak_variance):
 	"""
 		This will be our objective function for our DP
 
@@ -246,7 +397,7 @@ def total_costs_of_choice(scenarios, initial_height, incremental_height, stage, 
 
 	levee_height = initial_height + incremental_height
 
-	if levee_height > constants.MAXIMUM_LEVEE_HEIGHT:  # if this combination isn't allowed because it makes the levee too tall
+	if int(levee_height) > constants.MAXIMUM_LEVEE_HEIGHT:  # if this combination isn't allowed because it makes the levee too tall
 		return constants.EXCLUSION_VALUE  # then return that it's just really expensive to raise it like this - fast if we just exclude it right off the bat
 
 	# run the building and maintenance cost code ONCE, store the value
@@ -274,16 +425,25 @@ def total_costs_of_choice(scenarios, initial_height, incremental_height, stage, 
 	#
 	###
 
+	# cost = 0  # TODO: THIS IS FOR DEBUGGING ONLY - REMOVE!
+
+	# For each scenario take a set of flows times the probability of those flows and get a cost associated with it
+	# multiply those costs * the overall probability of that scenario at the stage.
+	flood_cost = 0
 	for scenario in scenarios:
-		# TODO: Add flows and probabilities here. cost of overtopping
-		cost += get_failure_costs(levee_height=levee_height, failure_function=vectorized_overtopping)  # TODO: Need to adjust this once we have the *probabilistic* flows
+		flow_object = scenario.flow_object_at_stage[stage.number]
+		flows = flow_object.flows(spread=constants.PROBABILITY_DISTRIBUTION_LIMITS[1], number=constants.PROBABILITY_DISTRIBUTION_DISCRETIZATION_UNITS)
+		probabilities = flow_object.probabilities()
+		bayesian_probability = 0.166666666666666666666 #scenario.bayesian_probabilities[stage.number].sum()
 
-		# TODO: Add flows and probabilities here. cost of geotechnical failure
-		cost += get_failure_costs(levee_height=levee_height, failure_function=levee_fails)
+		#cost of overtopping multiplied by scenario probability at stage
+		overtopping_costs = get_failure_costs(flows=flows, probabilities=probabilities, levee_height=levee_height, failure_function=vectorized_overtopping) * scenario.fake_probability_at_stage[stage.number]  # TODO: Need to adjust this once we have the *probabilistic* flows
+		flood_cost = flood_cost + overtopping_costs
 
-	# annualize it over the entire period
+		# cost of geotechnical failure multiplied by scenario probability at stage
+		flood_cost = flood_cost + get_failure_costs(flows=flows, probabilities=probabilities, levee_height=levee_height, failure_function=levee_fails) * scenario.fake_probability_at_stage[stage.number]  # sum the bayesian probability because we're not going to do the full transition calc - just get the probability that we're in this scenario at this stage
 
-	return cost
+	return cost + (flood_cost * constants.PERIOD_DISCOUNT_FACTOR)  # multiply the flood cost by the factor that makes it happen on an annual basis, but discounted
 
 
 def levee_raise_cost(current_height, incremental_height,):
@@ -298,11 +458,12 @@ def levee_raise_cost(current_height, incremental_height,):
 													length=constants.LEVEE_SYSTEM_LENGTH,
 													slope=constants.LAND_SIDE_SLOPE,
 													crown_width=constants.LEVEE_CROWN_WIDTH,
-													number_of_sides=2,)
+													number_of_sides=constants.NUMBER_OF_SIDES,)
 	cost = _levee_volume_cost(changes['volume_change'])  # get the cost of the change in volume
 	cost += constants.FIXED_LEVEE_ALTERATION_COST  # add the cost of any construction project
 	cost += changes['area_change'] * constants.LAND_PRICE  # add the cost of additional land that this levee sits on
 
+	return cost
 
 def maintenance_cost_stage(length=constants.LEVEE_SYSTEM_LENGTH,
 						   cost_per_length=constants.MAINTENANCE_COST_PER_METER,
@@ -342,14 +503,14 @@ def _levee_volume_cost(volume,
 	:return:
 	"""
 
-	return volume * present_value(material_cost, year=year, discount_rate=discount_rate)
+	return volume * material_cost
 
 
 def _levee_volume(height,
 					length=constants.LEVEE_SYSTEM_LENGTH,
 					slope=constants.LAND_SIDE_SLOPE,
 					crown_width=constants.LEVEE_CROWN_WIDTH,
-					number_of_sides=2,):
+					number_of_sides=constants.NUMBER_OF_SIDES,):
 
 	base_width = crown_width + (1/slope * height)
 	xc_area = (crown_width+base_width)/2 * height
@@ -360,7 +521,7 @@ def _levee_volume_change(initial_height, incremental_height,
 						 length=constants.LEVEE_SYSTEM_LENGTH,
 						slope=constants.LAND_SIDE_SLOPE,
 						crown_width=constants.LEVEE_CROWN_WIDTH,
-						number_of_sides=2,):
+						number_of_sides=constants.NUMBER_OF_SIDES,):
 
 	new_height = initial_height + incremental_height
 	old_volume = _levee_volume(initial_height, length, slope, crown_width, number_of_sides)
@@ -376,7 +537,7 @@ def levee_construction_cost(height,
 							length=constants.LEVEE_SYSTEM_LENGTH,
 							slope=constants.LAND_SIDE_SLOPE,
 							crown_width=constants.LEVEE_CROWN_WIDTH,
-							number_of_sides=2,
+							number_of_sides=constants.NUMBER_OF_SIDES,
 							material_cost=constants.COST_OF_SOIL,
 							discount_rate=constants.DISCOUNT_RATE):
 	"""
@@ -401,7 +562,7 @@ def levee_construction_cost(height,
 	return cost
 
 
-# Flow corresponding to aNY specific water level (from bottom of the river), calculated by Manning's Equation
+# Flow corresponding to ANY specific water level (from bottom of the river), calculated by Manning's Equation
 def get_flow_for_height(water_height):
 	"""
 		This is Rui's function for this exactly, incorporated here and adapted to my variable names
@@ -526,12 +687,3 @@ def get_failure_costs(flows, levee_height, probabilities, failure_function=vecto
 	return numpy.sum(costs * probabilities)  # the summed cost of each times its probability is our overtopping cost
 
 
-def z_score(observation, mu, sigma, sqrt_of_sample_size=constants.SQRT_INITIAL_SAMPLE_SIZE):
-	"""
-		Just a simple equation to calculate z-scores
-	:param observation:
-	:param mu:
-	:param sigma:
-	:return:
-	"""
-	return float(observation - mu)/(float(sigma)/float(sqrt_of_sample_size))

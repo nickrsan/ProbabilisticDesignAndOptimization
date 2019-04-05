@@ -7,6 +7,7 @@ from HW.HW2 import constants
 import logging
 log = logging.getLogger("levee.tests.support")
 
+
 class FlowHeightTest(unittest.TestCase):
 	def test_levee_height_lookup(self):
 		"""
